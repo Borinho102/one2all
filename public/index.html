@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>One 2 All Iframe Roomfire</title>
+    <style>
+        body {
+            margin: 0;
+            font-family: Arial, sans-serif;
+            background: #f8f9fa;
+            text-align: center;
+            padding: 20px;
+        }
+
+        h1 {
+            color: #333;
+        }
+
+        form {
+            margin: 20px auto;
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+            flex-wrap: wrap;
+            max-width: 700px;
+        }
+
+        input {
+            padding: 10px;
+            font-size: 16px;
+            border-radius: 8px;
+            border: 1px solid #ccc;
+            flex: 1;
+            min-width: 200px;
+        }
+
+        button {
+            background: #582B43;
+            color: #fff;
+            border: none;
+            border-radius: 8px;
+            padding: 10px 20px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+
+        button:hover {
+            background: #582B43;
+        }
+
+        .iframe-container {
+            position: relative;
+            width: 100%;
+            height: 80vh;
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+            border-radius: 12px;
+            overflow: hidden;
+            margin: 30px auto;
+            max-width: 1200px;
+            display: none; /* Hidden until iframe loads */
+        }
+
+        iframe {
+            width: 100%;
+            height: 100%;
+            border: none;
+        }
+    </style>
+</head>
+<body>
+
+<h1>🎥 One 2 All Iframe VLRoom</h1>
+
+<form id="iframeForm">
+    <input type="text" id="roomId" placeholder="Enter Room ID (e.g. 1850897)" required />
+    <input type="text" id="sessionToken" placeholder="Enter Session Token" required />
+    <button type="submit">Load Room</button>
+</form>
+
+<div class="iframe-container" id="iframeContainer">
+    <iframe id="dynamicIframe" title="Embedded Room"></iframe>
+</div>
+
+<script>
+    const form = document.getElementById("iframeForm");
+    const iframe = document.getElementById("dynamicIframe");
+    const container = document.getElementById("iframeContainer");
+
+    form.addEventListener("submit", (e) => {
+        e.preventDefault();
+
+        const roomId = document.getElementById("roomId").value.trim();
+        const sessionToken = document.getElementById("sessionToken").value.trim();
+
+        if (!roomId || !sessionToken) {
+            alert("Please enter both Room ID and Session Token.");
+            return;
+        }
+
+        // Construct the dynamic URL
+        const iframeUrl = `https://hub.one2all.tv/watch-party/frame/${roomId}?session=${encodeURIComponent(sessionToken)}`;
+
+        iframe.src = iframeUrl;
+        container.style.display = "block";
+    });
+</script>
+
+</body>
+</html>
