@@ -79,7 +79,8 @@
 </form>
 
 <div class="iframe-container" id="iframeContainer">
-    <iframe id="dynamicIframe" title="Embedded Room"></iframe>
+    <iframe allow="camera; microphone; autoplay; fullscreen"
+            allowfullscreen id="dynamicIframe" title="Embedded Room"></iframe>
 </div>
 
 <script>
@@ -99,7 +100,7 @@
         }
 
         // Construct the dynamic URL
-        const iframeUrl = `https://hub.one2all.tv/watch-party/frame/${roomId}?session=${encodeURIComponent(sessionToken)}`;
+        const iframeUrl = `http://localhost:3000/watch-party/frame/${roomId}?session=${encodeURIComponent(sessionToken)}`;
 
         iframe.src = iframeUrl;
         container.style.display = "block";
