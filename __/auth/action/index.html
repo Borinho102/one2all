@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MonLook - Ouvrir dans l'application</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 24px;
+            padding: 48px 32px;
+            max-width: 450px;
+            width: 100%;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            text-align: center;
+            animation: slideUp 0.4s ease-out;
+        }
+
+        @keyframes slideUp {
+            from {
+                opacity: 0;
+                transform: translateY(30px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .logo {
+            width: 80px;
+            height: 80px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 20px;
+            margin: 0 auto 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 40px;
+            color: white;
+            font-weight: bold;
+            box-shadow: 0 10px 30px rgba(102, 126, 234, 0.4);
+        }
+
+        h1 {
+            font-size: 28px;
+            color: #1a1a1a;
+            margin-bottom: 12px;
+            font-weight: 700;
+        }
+
+        .subtitle {
+            font-size: 16px;
+            color: #666;
+            margin-bottom: 32px;
+            line-height: 1.5;
+        }
+
+        .loading {
+            margin: 24px 0;
+        }
+
+        .spinner {
+            width: 48px;
+            height: 48px;
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            margin: 0 auto;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .status {
+            font-size: 14px;
+            color: #667eea;
+            margin-top: 12px;
+            font-weight: 500;
+        }
+
+        .divider {
+            display: flex;
+            align-items: center;
+            margin: 32px 0;
+            color: #999;
+            font-size: 14px;
+        }
+
+        .divider::before,
+        .divider::after {
+            content: '';
+            flex: 1;
+            height: 1px;
+            background: #e0e0e0;
+        }
+
+        .divider::before {
+            margin-right: 12px;
+        }
+
+        .divider::after {
+            margin-left: 12px;
+        }
+
+        .download-section {
+            display: none;
+        }
+
+        .download-section.show {
+            display: block;
+            animation: fadeIn 0.3s ease-out;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        .download-text {
+            font-size: 15px;
+            color: #666;
+            margin-bottom: 20px;
+        }
+
+        .app-buttons {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .app-button {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            padding: 16px 24px;
+            background: #1a1a1a;
+            color: white;
+            text-decoration: none;
+            border-radius: 12px;
+            font-size: 15px;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+        }
+
+        .app-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.15);
+        }
+
+        .app-button:active {
+            transform: translateY(0);
+        }
+
+        .app-button.android {
+            background: #3DDC84;
+        }
+
+        .app-button.ios {
+            background: #000;
+        }
+
+        .icon {
+            width: 24px;
+            height: 24px;
+        }
+
+        .footer {
+            margin-top: 32px;
+            padding-top: 24px;
+            border-top: 1px solid #e0e0e0;
+        }
+
+        .help-text {
+            font-size: 13px;
+            color: #999;
+        }
+
+        .help-link {
+            color: #667eea;
+            text-decoration: none;
+            font-weight: 500;
+        }
+
+        .help-link:hover {
+            text-decoration: underline;
+        }
+
+        @media (max-width: 480px) {
+            .container {
+                padding: 40px 24px;
+            }
+
+            h1 {
+                font-size: 24px;
+            }
+
+            .subtitle {
+                font-size: 15px;
+            }
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <div class="logo">M</div>
+
+    <h1>Ouvrir MonLook</h1>
+    <p class="subtitle">
+        Ce lien doit s'ouvrir automatiquement dans l'application MonLook
+    </p>
+
+    <div class="loading" id="loading">
+        <div class="spinner"></div>
+        <p class="status">Tentative d'ouverture...</p>
+    </div>
+
+    <div class="download-section" id="downloadSection">
+        <div class="divider">Téléchargez l'application</div>
+
+        <p class="download-text">
+            L'application n'est pas installée ? Téléchargez-la gratuitement
+        </p>
+
+        <div class="app-buttons">
+            <a href="https://play.google.com/store/apps/details?id=com.monlook.app" class="app-button android">
+                <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M3,20.5V3.5C3,2.91 3.34,2.39 3.84,2.15L13.69,12L3.84,21.85C3.34,21.6 3,21.09 3,20.5M16.81,15.12L6.05,21.34L14.54,12.85L16.81,15.12M20.16,10.81C20.5,11.08 20.75,11.5 20.75,12C20.75,12.5 20.53,12.9 20.18,13.18L17.89,14.5L15.39,12L17.89,9.5L20.16,10.81M6.05,2.66L16.81,8.88L14.54,11.15L6.05,2.66Z"/>
+                </svg>
+                <span>Télécharger sur Google Play</span>
+            </a>
+
+            <a href="https://apps.apple.com/app/monlook/id123456789" class="app-button ios">
+                <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M18.71,19.5C17.88,20.74 17,21.95 15.66,21.97C14.32,22 13.89,21.18 12.37,21.18C10.84,21.18 10.37,21.95 9.1,22C7.79,22.05 6.8,20.68 5.96,19.47C4.25,17 2.94,12.45 4.7,9.39C5.57,7.87 7.13,6.91 8.82,6.88C10.1,6.86 11.32,7.75 12.11,7.75C12.89,7.75 14.37,6.68 15.92,6.84C16.57,6.87 18.39,7.1 19.56,8.82C19.47,8.88 17.39,10.1 17.41,12.63C17.44,15.65 20.06,16.66 20.09,16.67C20.06,16.74 19.67,18.11 18.71,19.5M13,3.5C13.73,2.67 14.94,2.04 15.94,2C16.07,3.17 15.6,4.35 14.9,5.19C14.21,6.04 13.07,6.7 11.95,6.61C11.8,5.46 12.36,4.26 13,3.5Z"/>
+                </svg>
+                <span>Télécharger sur l'App Store</span>
+            </a>
+        </div>
+    </div>
+
+    <div class="footer">
+        <p class="help-text">
+            Besoin d'aide ? <a href="mailto:support@monlook.com" class="help-link">Contactez-nous</a>
+        </p>
+    </div>
+</div>
+
+<script>
+    let appOpened = false;
+    let timerStarted = false;
+
+    // Try to open the app with the deep link
+    function attemptOpenApp() {
+        const fullUrl = window.location.href;
+
+        // Try multiple deep link formats
+        const deepLinks = [
+            fullUrl.replace('https://', 'monlook://'),
+            fullUrl.replace('https://app.monlook.online', 'monlook:/'),
+            'monlook://auth/action' + window.location.search
+        ];
+
+        // Try the first deep link
+        window.location.href = deepLinks[0];
+
+        // Start detection immediately
+        startDetection();
+    }
+
+    function startDetection() {
+        if (timerStarted) return;
+        timerStarted = true;
+
+        const startTime = Date.now();
+
+        // Check if page is still visible after 1.5 seconds
+        setTimeout(() => {
+            const timeElapsed = Date.now() - startTime;
+
+            // If less than 2 seconds passed and page is still visible,
+            // app likely didn't open
+            if (timeElapsed < 2000 && !document.hidden) {
+                showDownloadSection();
+            }
+        }, 1500);
+
+        // Also check on visibility change
+        const visibilityHandler = () => {
+            if (document.hidden) {
+                // Page became hidden - app likely opened
+                appOpened = true;
+            } else if (!appOpened) {
+                // Page became visible again without app opening
+                setTimeout(() => {
+                    if (!document.hidden) {
+                        showDownloadSection();
+                    }
+                }, 500);
+            }
+        };
+
+        document.addEventListener('visibilitychange', visibilityHandler, { once: true });
+
+        // Fallback: show download section after 2.5 seconds no matter what
+        setTimeout(() => {
+            if (!appOpened) {
+                showDownloadSection();
+            }
+        }, 2500);
+    }
+
+    function showDownloadSection() {
+        document.getElementById('loading').style.display = 'none';
+        document.getElementById('downloadSection').classList.add('show');
+    }
+
+    // Detect if user comes from mobile or desktop
+    function isMobile() {
+        return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+    }
+
+    // Start the process on page load
+    if (isMobile()) {
+        attemptOpenApp();
+    } else {
+        // On desktop, show download links immediately
+        showDownloadSection();
+    }
+
+    // Handle page focus/blur for better detection
+    window.addEventListener('blur', () => {
+        appOpened = true;
+    });
+
+    window.addEventListener('focus', () => {
+        if (!appOpened) {
+            setTimeout(() => {
+                showDownloadSection();
+            }, 500);
+        }
+    });
+</script>
+</body>
+</html>
