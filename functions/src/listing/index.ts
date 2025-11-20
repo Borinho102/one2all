@@ -1,6 +1,56 @@
 import * as functions from 'firebase-functions';
 import * as admin from 'firebase-admin';
 
+/**
+ * ENHANCED FIREBASE CLOUD FUNCTIONS WITH MULTI-LEVEL ARRAY FILTERING
+ *
+ * This module provides advanced querying capabilities for Firestore collections with:
+ * - Multi-level nested field filtering (e.g., "address.city.name")
+ * - Array property filtering (e.g., "serviceCategories.key")
+ * - Complex AND/OR filter logic
+ * - Forward and reverse population
+ * - Full-text search with relevance scoring
+ * - Sorting and pagination
+ *
+ * MULTI-LEVEL ARRAY FILTERING EXAMPLES:
+ *
+ * 1. Filter by nested property in an array of objects:
+ *    {
+ *      "filters": {
+ *        "logic": "and",
+ *        "filters": [
+ *          {"field": "role", "operator": "eq", "value": "vendor"},
+ *          {"field": "serviceCategories.key", "operator": "eq", "value": "hair"}
+ *        ]
+ *      }
+ *    }
+ *
+ * 2. Multiple conditions on array properties:
+ *    {
+ *      "filters": {
+ *        "logic": "or",
+ *        "filters": [
+ *          {"field": "serviceCategories.key", "operator": "eq", "value": "spa"},
+ *          {"field": "serviceCategories.key", "operator": "eq", "value": "hair"}
+ *        ]
+ *      }
+ *    }
+ *
+ * 3. Deep nested array filtering:
+ *    {
+ *      "filters": {
+ *        "logic": "and",
+ *        "filters": [
+ *          {"field": "orders.items.category", "operator": "eq", "value": "electronics"},
+ *          {"field": "orders.items.price", "operator": "gt", "value": 100}
+ *        ]
+ *      }
+ *    }
+ *
+ * The getNestedValue() function automatically traverses arrays and extracts nested properties,
+ * and matchesSingleFilter() checks if ANY array element matches the filter criteria.
+ */
+
 // Initialize Firebase Admin (only do this once)
 admin.initializeApp();
 
@@ -198,12 +248,16 @@ interface SortCriteria {
 }
 
 interface PopulateOptions {
-    field: string;           // The field in the current document that contains the foreign key(s)
-    collection: string;      // The collection to fetch from
+    field?: string;           // Field in current document containing foreign key(s) - FORWARD
+    link?: string;            // Field in target collection referencing current doc - REVERSE
+    collection: string;       // The collection to fetch from
     select?: string | string[]; // Fields to return from the foreign document ('*' for all, or array of field names)
-    as?: string;            // Optional: rename the populated field (default: uses original field name)
+    as?: string;             // Optional: rename the populated field (default: uses original field name)
+    type?: 'forward' | 'reverse'; // Explicitly set population type (auto-detected if not provided)
+    populate?: PopulateOptions[]; // Nested population
 }
 
+// @ts-ignore
 function parseFilters(filters: any): FilterGroup {
     if (!filters) return { logic: 'and', filters: [] };
 
@@ -233,13 +287,14 @@ function parseFilters(filters: any): FilterGroup {
     return { logic: 'and', filters: [] };
 }
 
+// @ts-ignore
 // Helper function to check if filters reference populated fields
 function checkIfFiltersNeedPopulation(filterGroup: FilterGroup, populateOptions: PopulateOptions[]): boolean {
     if (!populateOptions || populateOptions.length === 0) return false;
     if (!filterGroup.filters || filterGroup.filters.length === 0) return false;
 
     // Get list of populated field paths
-    const populatedFields = populateOptions.map(opt => opt.as || opt.field);
+    const populatedFields = populateOptions.map(opt => opt.as || opt.field || opt.collection);
 
     // Recursively check if any filter references a populated field
     function checkFilters(filters: (FilterCriteria | FilterGroup)[]): boolean {
@@ -260,12 +315,13 @@ function checkIfFiltersNeedPopulation(filterGroup: FilterGroup, populateOptions:
     return checkFilters(filterGroup.filters);
 }
 
+// @ts-ignore
 // Helper function to check if sort criteria reference populated fields
 function checkIfSortNeedsPopulation(sortCriteria: SortCriteria[], populateOptions: PopulateOptions[]): boolean {
     if (!populateOptions || populateOptions.length === 0) return false;
     if (!sortCriteria || sortCriteria.length === 0) return false;
 
-    const populatedFields = populateOptions.map(opt => opt.as || opt.field);
+    const populatedFields = populateOptions.map(opt => opt.as || opt.field || opt.collection);
 
     return sortCriteria.some(sort =>
         populatedFields.some(popField =>
@@ -274,6 +330,7 @@ function checkIfSortNeedsPopulation(sortCriteria: SortCriteria[], populateOption
     );
 }
 
+// @ts-ignore
 // Helper function to parse populate parameters
 function parsePopulateOptions(populateParam: any): PopulateOptions[] {
     if (!populateParam) return [];
@@ -282,9 +339,12 @@ function parsePopulateOptions(populateParam: any): PopulateOptions[] {
     if (Array.isArray(populateParam)) {
         return populateParam.map(p => ({
             field: p.field,
+            link: p.link,
             collection: p.collection,
             select: p.select || '*',
-            as: p.as || p.field
+            as: p.as || p.field || (p.link ? p.collection : undefined),
+            type: p.type,
+            populate: p.populate ? parsePopulateOptions(p.populate) : undefined
         }));
     }
 
@@ -295,18 +355,24 @@ function parsePopulateOptions(populateParam: any): PopulateOptions[] {
             if (Array.isArray(parsed)) {
                 return parsed.map(p => ({
                     field: p.field,
+                    link: p.link,
                     collection: p.collection,
                     select: p.select || '*',
-                    as: p.as || p.field
+                    as: p.as || p.field || (p.link ? p.collection : undefined),
+                    type: p.type,
+                    populate: p.populate ? parsePopulateOptions(p.populate) : undefined
                 }));
             }
             // Single populate object
-            if (parsed.field && parsed.collection) {
+            if ((parsed.field || parsed.link) && parsed.collection) {
                 return [{
                     field: parsed.field,
+                    link: parsed.link,
                     collection: parsed.collection,
                     select: parsed.select || '*',
-                    as: parsed.as || parsed.field
+                    as: parsed.as || parsed.field || (parsed.link ? parsed.collection : undefined),
+                    type: parsed.type,
+                    populate: parsed.populate ? parsePopulateOptions(parsed.populate) : undefined
                 }];
             }
         } catch {
@@ -315,12 +381,15 @@ function parsePopulateOptions(populateParam: any): PopulateOptions[] {
     }
 
     // Single populate object
-    if (populateParam.field && populateParam.collection) {
+    if ((populateParam.field || populateParam.link) && populateParam.collection) {
         return [{
             field: populateParam.field,
+            link: populateParam.link,
             collection: populateParam.collection,
             select: populateParam.select || '*',
-            as: populateParam.as || populateParam.field
+            as: populateParam.as || populateParam.field || (populateParam.link ? populateParam.collection : undefined),
+            type: populateParam.type,
+            populate: populateParam.populate ? parsePopulateOptions(populateParam.populate) : undefined
         }];
     }
 
@@ -361,6 +430,51 @@ function selectFields(doc: any, select: string | string[]): any {
     return result;
 }
 
+// ENHANCED: Helper function to get nested field value with improved array handling
+function getNestedValue(obj: any, path: string): any {
+    const parts = path.split('.');
+    let current = obj;
+
+    for (let i = 0; i < parts.length; i++) {
+        const part = parts[i];
+
+        if (current === null || current === undefined) {
+            return undefined;
+        }
+
+        // Handle array notation (e.g., "items[0].name")
+        const arrayMatch = part.match(/^(.+)\[(\d+)\]$/);
+
+        if (arrayMatch) {
+            const [, arrayName, index] = arrayMatch;
+            current = current[arrayName];
+            if (Array.isArray(current)) {
+                current = current[parseInt(index)];
+            }
+        } else {
+            current = current[part];
+        }
+
+        // ENHANCED: If current is an array and we have more path parts to traverse
+        // Extract the nested property from ALL array elements
+        if (Array.isArray(current) && i < parts.length - 1) {
+            const remainingPath = parts.slice(i + 1).join('.');
+            // Get the nested value from each array element
+            const nestedValues = current
+                .map(item => {
+                    if (item === null || item === undefined) return undefined;
+                    return getNestedValue(item, remainingPath);
+                })
+                .filter(val => val !== undefined);
+
+            // Return array of nested values (will be handled by matchesSingleFilter)
+            return nestedValues.length > 0 ? nestedValues : undefined;
+        }
+    }
+
+    return current;
+}
+
 // Helper function to set nested field value using dot notation
 function setNestedValue(obj: any, path: string, value: any): void {
     const parts = path.split('.');
@@ -377,103 +491,273 @@ function setNestedValue(obj: any, path: string, value: any): void {
     current[parts[parts.length - 1]] = value;
 }
 
-// Helper function to populate foreign fields
+// ENHANCED: Helper function to flatten array values for searching
+function flattenValue(value: any): any[] {
+    if (value === null || value === undefined) {
+        return [];
+    }
+
+    // Skip Firestore timestamps
+    if (isFirestoreTimestamp(value)) {
+        return [value]; // Return as-is for timestamp comparison
+    }
+
+    if (Array.isArray(value)) {
+        // Flatten nested arrays
+        return value
+            .map(item => flattenValue(item))
+            .flat()
+            .filter(v => v !== null && v !== undefined);
+    }
+
+    // For primitive values, return as single-element array
+    if (typeof value !== 'object' || value instanceof Date) {
+        return [value];
+    }
+
+    // For objects (like {key: "hair", label_en: "Haircut"}), return the object itself
+    // This allows matching against nested properties
+    return [value];
+}
+
+// ============================================================
+// ENHANCED POPULATE FUNCTION WITH REVERSE SUPPORT
+// ============================================================
+
+// Main populate function that handles both forward and reverse
 async function populateDocuments(documents: any[], populateOptions: PopulateOptions[]): Promise<any[]> {
     if (!populateOptions || populateOptions.length === 0) {
         return documents;
     }
 
-    // Create a cache for fetched documents to avoid duplicate queries
-    const cache: { [key: string]: { [id: string]: any } } = {};
-
-    // Process each populate option
     for (const option of populateOptions) {
-        const { field, collection, select, as } = option;
+        const { field, link, type } = option;
 
-        // Initialize cache for this collection
-        if (!cache[collection]) {
-            cache[collection] = {};
+        // Determine population type
+        const isReverse = type === 'reverse' || (link && !field);
+        const isForward = type === 'forward' || (field && !link);
+
+        if (!isReverse && !isForward) {
+            console.error('Population option must have either "field" (forward) or "link" (reverse)');
+            continue;
         }
 
-        // Collect all unique foreign keys that need to be fetched
-        const foreignKeysSet = new Set<string>();
-        documents.forEach(doc => {
-            const foreignKey = getNestedValue(doc, field);
-
-            if (foreignKey) {
-                // Handle array of foreign keys
-                if (Array.isArray(foreignKey)) {
-                    foreignKey.forEach(fk => {
-                        if (fk && typeof fk === 'string') {
-                            foreignKeysSet.add(fk);
-                        }
-                    });
-                } else if (typeof foreignKey === 'string') {
-                    foreignKeysSet.add(foreignKey);
-                }
-            }
-        });
-
-        // Fetch documents that aren't in cache
-        const foreignKeys = Array.from(foreignKeysSet);
-        const keysToFetch = foreignKeys.filter(fk => !cache[collection][fk]);
-
-        if (keysToFetch.length > 0) {
-            // Firestore 'in' query supports up to 10 items, so we need to batch
-            const batchSize = 10;
-            for (let i = 0; i < keysToFetch.length; i += batchSize) {
-                const batch = keysToFetch.slice(i, i + batchSize);
-
-                try {
-                    const snapshot = await db.collection(collection)
-                        .where(admin.firestore.FieldPath.documentId(), 'in', batch)
-                        .get();
-
-                    snapshot.forEach(doc => {
-                        const docData = { id: doc.id, ...doc.data() };
-                        cache[collection][doc.id] = selectFields(docData, select || '*');
-                    });
-                } catch (error) {
-                    console.error(`Error fetching from collection ${collection}:`, error);
-                }
-            }
-
-            // Mark keys that weren't found as null
-            keysToFetch.forEach(fk => {
-                if (!cache[collection][fk]) {
-                    cache[collection][fk] = null;
-                }
-            });
+        if (isReverse) {
+            await performReversePopulation(documents, option);
+        } else {
+            await performForwardPopulation(documents, option);
         }
-
-        // Populate the documents
-        documents.forEach(doc => {
-            const foreignKey = getNestedValue(doc, field);
-            const targetField = as || field;
-
-            if (foreignKey) {
-                // Handle array of foreign keys
-                if (Array.isArray(foreignKey)) {
-                    const populatedArray = foreignKey
-                        .map(fk => cache[collection][fk])
-                        .filter(item => item !== null && item !== undefined);
-
-                    setNestedValue(doc, targetField, populatedArray);
-                } else if (typeof foreignKey === 'string') {
-                    // Single foreign key
-                    const populatedDoc = cache[collection][foreignKey];
-                    setNestedValue(doc, targetField, populatedDoc || null);
-                }
-            } else {
-                // Set to null if no foreign key exists
-                setNestedValue(doc, targetField, null);
-            }
-        });
     }
 
     return documents;
 }
 
+// Forward population (original logic)
+async function performForwardPopulation(documents: any[], option: PopulateOptions): Promise<void> {
+    const { field, collection, select, as } = option;
+
+    if (!field) {
+        console.error('Forward population requires "field" parameter');
+        return;
+    }
+
+    const cache: { [id: string]: any } = {};
+
+    // Collect unique foreign keys
+    const foreignKeysSet = new Set<string>();
+    documents.forEach(doc => {
+        const foreignKey = getNestedValue(doc, field);
+
+        if (foreignKey) {
+            if (Array.isArray(foreignKey)) {
+                foreignKey.forEach(fk => {
+                    if (fk && typeof fk === 'string') {
+                        foreignKeysSet.add(fk);
+                    }
+                });
+            } else if (typeof foreignKey === 'string') {
+                foreignKeysSet.add(foreignKey);
+            }
+        }
+    });
+
+    const foreignKeys = Array.from(foreignKeysSet);
+
+    if (foreignKeys.length > 0) {
+        // Firestore 'in' query supports up to 10 items, so batch the requests
+        const batchSize = 10;
+        for (let i = 0; i < foreignKeys.length; i += batchSize) {
+            const batch = foreignKeys.slice(i, i + batchSize);
+
+            try {
+                const snapshot = await db.collection(collection)
+                    .where(admin.firestore.FieldPath.documentId(), 'in', batch)
+                    .get();
+
+                snapshot.forEach(doc => {
+                    const docData = { id: doc.id, ...doc.data() };
+                    cache[doc.id] = selectFields(docData, select || '*');
+                });
+            } catch (error) {
+                console.error(`Error fetching from collection ${collection}:`, error);
+            }
+        }
+
+        // Mark keys that weren't found as null
+        foreignKeys.forEach(fk => {
+            if (!cache[fk]) {
+                cache[fk] = null;
+            }
+        });
+    }
+
+    // Populate the documents
+    documents.forEach(doc => {
+        const foreignKey = getNestedValue(doc, field);
+        const targetField = as || field;
+
+        if (foreignKey) {
+            if (Array.isArray(foreignKey)) {
+                const populatedArray = foreignKey
+                    .map(fk => cache[fk])
+                    .filter(item => item !== null && item !== undefined);
+
+                setNestedValue(doc, targetField, populatedArray);
+            } else if (typeof foreignKey === 'string') {
+                const populatedDoc = cache[foreignKey];
+                setNestedValue(doc, targetField, populatedDoc || null);
+            }
+        } else {
+            setNestedValue(doc, targetField, null);
+        }
+    });
+
+    // Handle nested population
+    if (option.populate && option.populate.length > 0) {
+        const targetField = as || field;
+
+        const nestedDocs: any[] = [];
+        documents.forEach(doc => {
+            const populatedValue = getNestedValue(doc, targetField);
+            if (populatedValue) {
+                if (Array.isArray(populatedValue)) {
+                    nestedDocs.push(...populatedValue.filter(v => v !== null));
+                } else if (populatedValue !== null) {
+                    nestedDocs.push(populatedValue);
+                }
+            }
+        });
+
+        if (nestedDocs.length > 0) {
+            await populateDocuments(nestedDocs, option.populate);
+        }
+    }
+}
+
+// Reverse population (NEW)
+async function performReversePopulation(documents: any[], option: PopulateOptions): Promise<void> {
+    const { link, collection, select, as } = option;
+
+    if (!link) {
+        console.error('Reverse population requires "link" parameter');
+        return;
+    }
+
+    // Get all document IDs from current documents
+    const documentIds = documents.map(doc => doc.id).filter(id => id);
+
+    if (documentIds.length === 0) {
+        return;
+    }
+
+    // Create a map to store related documents for each parent document
+    const relatedDocsMap: { [parentId: string]: any[] } = {};
+    documents.forEach(doc => {
+        relatedDocsMap[doc.id] = [];
+    });
+
+    // Fetch documents from target collection where 'link' field matches any of our document IDs
+    const batchSize = 10;
+    for (let i = 0; i < documentIds.length; i += batchSize) {
+        const batch = documentIds.slice(i, i + batchSize);
+
+        try {
+            const snapshot = await db.collection(collection)
+                .where(link, 'in', batch)
+                .get();
+
+            snapshot.forEach(doc => {
+                const docData: any = { id: doc.id, ...doc.data() };
+                const selectedDoc = selectFields(docData, select || '*');
+
+                // Get the parent ID this document references
+                const parentId = docData[link] as string;
+
+                if (parentId && relatedDocsMap[parentId]) {
+                    relatedDocsMap[parentId].push(selectedDoc);
+                }
+            });
+        } catch (error) {
+            console.error(`Error performing reverse population from collection ${collection}:`, error);
+        }
+    }
+
+    // Also handle array fields in the target collection
+    try {
+        const snapshot = await db.collection(collection).get();
+
+        snapshot.forEach(doc => {
+            const docData: any = { id: doc.id, ...doc.data() };
+            const linkValue = docData[link];
+
+            // Check if link field is an array containing any of our document IDs
+            if (Array.isArray(linkValue)) {
+                const matchingParentIds = documentIds.filter(id => linkValue.includes(id));
+
+                if (matchingParentIds.length > 0) {
+                    const selectedDoc = selectFields(docData, select || '*');
+                    matchingParentIds.forEach(parentId => {
+                        if (relatedDocsMap[parentId]) {
+                            // Avoid duplicates
+                            const exists = relatedDocsMap[parentId].some(d => d.id === selectedDoc.id);
+                            if (!exists) {
+                                relatedDocsMap[parentId].push(selectedDoc);
+                            }
+                        }
+                    });
+                }
+            }
+        });
+    } catch (error) {
+        console.error(`Error checking array fields in reverse population:`, error);
+    }
+
+    // Assign the populated arrays to each document
+    documents.forEach(doc => {
+        const targetField = as || `${collection}`;
+        const relatedDocs = relatedDocsMap[doc.id] || [];
+        setNestedValue(doc, targetField, relatedDocs);
+    });
+
+    // Handle nested population on the reverse-populated documents
+    if (option.populate && option.populate.length > 0) {
+        const targetField = as || `${collection}`;
+
+        const allNestedDocs: any[] = [];
+        documents.forEach(doc => {
+            const populatedValue = getNestedValue(doc, targetField);
+            if (Array.isArray(populatedValue)) {
+                allNestedDocs.push(...populatedValue.filter(v => v !== null));
+            }
+        });
+
+        if (allNestedDocs.length > 0) {
+            await populateDocuments(allNestedDocs, option.populate);
+        }
+    }
+}
+
+// @ts-ignore
 function parseSortCriteria(sortParam: any): SortCriteria[] {
     if (!sortParam) return [];
 
@@ -575,6 +859,7 @@ function compareSortValues(a: any, b: any, order: 'asc' | 'desc'): number {
     return order === 'desc' ? -comparison : comparison;
 }
 
+// @ts-ignore
 // Helper function to sort documents by multiple criteria
 function sortDocuments(documents: any[], sortCriteria: SortCriteria[]): any[] {
     if (!sortCriteria || sortCriteria.length === 0) {
@@ -601,7 +886,7 @@ function sortDocuments(documents: any[], sortCriteria: SortCriteria[]): any[] {
     });
 }
 
-// Helper function to compare values based on operator
+// ENHANCED: Helper function to compare values with improved array handling
 function compareValues(docValue: any, operator: string, filterValue: any, filterValue2?: any): boolean {
     // Handle null/undefined
     if (docValue === null || docValue === undefined) {
@@ -679,6 +964,7 @@ function compareValues(docValue: any, operator: string, filterValue: any, filter
     return false;
 }
 
+// @ts-ignore
 // Helper function to check if document matches filters with AND/OR logic
 function matchesFilterGroup(doc: any, filterGroup: FilterGroup): boolean {
     if (!filterGroup.filters || filterGroup.filters.length === 0) return true;
@@ -708,12 +994,13 @@ function matchesFilterGroup(doc: any, filterGroup: FilterGroup): boolean {
     }
 }
 
-// Helper function to check single filter criteria
+// ENHANCED: Helper function to check single filter criteria with improved array support
 function matchesSingleFilter(doc: any, filter: FilterCriteria): boolean {
     const fieldValue = getNestedValue(doc, filter.field);
 
     // Handle arrays - check if ANY element matches
     if (Array.isArray(fieldValue)) {
+        // Flatten the array values for comparison
         const flatValues = flattenValue(fieldValue);
         return flatValues.some(val =>
             compareValues(val, filter.operator, filter.value, filter.value2)
@@ -721,135 +1008,6 @@ function matchesSingleFilter(doc: any, filter: FilterCriteria): boolean {
     }
 
     return compareValues(fieldValue, filter.operator, filter.value, filter.value2);
-}
-
-// Helper function to check if document matches all filters (legacy support)
-// @ts-ignore
-function matchesFilters(doc: any, filters: FilterCriteria[]): boolean {
-    if (!filters || filters.length === 0) return true;
-
-    return filters.every(filter => matchesSingleFilter(doc, filter));
-}
-
-// Helper function to get nested field value using dot notation (supports arrays)
-function getNestedValue(obj: any, path: string): any {
-    const parts = path.split('.');
-    let current = obj;
-
-    for (const part of parts) {
-        if (current === null || current === undefined) {
-            return undefined;
-        }
-
-        // Handle array notation (e.g., "items[0].name" or just "items")
-        const arrayMatch = part.match(/^(.+)\[(\d+)\]$/);
-
-        if (arrayMatch) {
-            // Extract array name and index
-            const [, arrayName, index] = arrayMatch;
-            current = current[arrayName];
-            if (Array.isArray(current)) {
-                current = current[parseInt(index)];
-            }
-        } else {
-            current = current[part];
-        }
-
-        // If current is an array and we haven't reached the end, search all elements
-        if (Array.isArray(current) && parts.indexOf(part) < parts.length - 1) {
-            const remainingPath = parts.slice(parts.indexOf(part) + 1).join('.');
-            // Recursively get values from all array elements
-            return current
-                .map(item => getNestedValue(item, remainingPath))
-                .filter(val => val !== undefined);
-        }
-    }
-
-    return current;
-}
-
-// Helper function to flatten array values for searching
-function flattenValue(value: any): string[] {
-    if (value === null || value === undefined) {
-        return [];
-    }
-
-    // Skip Firestore timestamps
-    if (isFirestoreTimestamp(value)) {
-        return [];
-    }
-
-    if (Array.isArray(value)) {
-        return value
-            .map(item => flattenValue(item))
-            .flat()
-            .filter(Boolean);
-    }
-
-    if (typeof value === 'object' && !(value instanceof Date)) {
-        // Skip objects that look like Firestore timestamps
-        if (isFirestoreTimestamp(value)) {
-            return [];
-        }
-        return Object.values(value)
-            .map(v => flattenValue(v))
-            .flat()
-            .filter(Boolean);
-    }
-
-    return [String(value)];
-}
-
-// Helper function to calculate relevance score
-function calculateRelevanceScore(
-    doc: any,
-    searchTerms: string[],
-    searchableFields: string[],
-    fieldWeights: { [key: string]: number }
-): number {
-    let score = 0;
-
-    searchableFields.forEach(field => {
-        // Support nested fields with dot notation (e.g., "address.city", "items[0].name")
-        const fieldValue = getNestedValue(doc, field);
-        const weight = fieldWeights[field] || 1;
-
-        // Flatten array values into searchable strings
-        const searchableValues = flattenValue(fieldValue);
-
-        searchableValues.forEach(value => {
-            const normalizedValue = String(value).toLowerCase();
-
-            searchTerms.forEach((term, index) => {
-                // Exact match gets highest score
-                if (normalizedValue === term) {
-                    score += 100 * weight;
-                }
-                // Starts with term
-                else if (normalizedValue.startsWith(term)) {
-                    score += 50 * weight;
-                }
-                // Contains term
-                else if (normalizedValue.includes(term)) {
-                    score += 25 * weight;
-                }
-
-                // Word boundary match (term appears as a separate word)
-                const wordBoundaryRegex = new RegExp(`\\b${term}\\b`, 'i');
-                if (wordBoundaryRegex.test(normalizedValue)) {
-                    score += 15 * weight;
-                }
-
-                // Bonus for matching earlier terms (position matters)
-                const positionBonus = (searchTerms.length - index) * 2;
-                if (normalizedValue.includes(term)) {
-                    score += positionBonus * weight;
-                }
-            });
-        });
-    });
-
-    return score;
 }
 
 // Helper function to extract all searchable fields from documents (including nested arrays)
@@ -944,7 +1102,60 @@ function extractSearchableFields(documents: any[], maxDepth: number = 3): string
     return Array.from(fieldsSet);
 }
 
-// Advanced search function with relevance ranking, pagination, filters, and sorting
+
+// Helper function to calculate relevance score
+function calculateRelevanceScore(
+    doc: any,
+    searchTerms: string[],
+    searchableFields: string[],
+    fieldWeights: { [key: string]: number }
+): number {
+    let score = 0;
+
+    searchableFields.forEach(field => {
+        // Support nested fields with dot notation (e.g., "address.city", "items[0].name")
+        const fieldValue = getNestedValue(doc, field);
+        const weight = fieldWeights[field] || 1;
+
+        // Flatten array values into searchable strings
+        const searchableValues = flattenValue(fieldValue);
+
+        searchableValues.forEach(value => {
+            const normalizedValue = String(value).toLowerCase();
+
+            searchTerms.forEach((term, index) => {
+                // Exact match gets highest score
+                if (normalizedValue === term) {
+                    score += 100 * weight;
+                }
+                // Starts with term
+                else if (normalizedValue.startsWith(term)) {
+                    score += 50 * weight;
+                }
+                // Contains term
+                else if (normalizedValue.includes(term)) {
+                    score += 25 * weight;
+                }
+
+                // Word boundary match (term appears as a separate word)
+                const wordBoundaryRegex = new RegExp(`\\b${term}\\b`, 'i');
+                if (wordBoundaryRegex.test(normalizedValue)) {
+                    score += 15 * weight;
+                }
+
+                // Bonus for matching earlier terms (position matters)
+                const positionBonus = (searchTerms.length - index) * 2;
+                if (normalizedValue.includes(term)) {
+                    score += positionBonus * weight;
+                }
+            });
+        });
+    });
+
+    return score;
+}
+
+
 export const searchData = functions.https.onRequest(async (req, res) => {
     res.set('Access-Control-Allow-Origin', '*');
 

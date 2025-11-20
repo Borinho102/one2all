@@ -23,7 +23,7 @@ app.use(express.urlencoded({ extended: true }));
 /// app.use(authMiddleware);
 
 // API Versioning
-app.use("/v1/listing", listingRouter);
+app.use("/api/v1/listing", listingRouter);
 
 // Swagger Docs
 registerSwagger(app);
