@@ -20,6 +20,12 @@ import {
 import {
     fetchCollectionWithRelations
 } from "../../listing/services";
+import {
+    sendBatchNotifications,
+    sendNotification,
+    sendNotificationCallable,
+    sendNotificationToUser
+} from "../../listing/alert";
 
 export const listingRouter = Router();
 
@@ -290,3 +296,9 @@ listingRouter.get("/booking-detail-by-id", wrap(getBookingDetailById));
  *         description: Server error
  */
 listingRouter.all("/bookings-by-mode", wrap(getBookingsByMode));
+
+
+listingRouter.all("/notification", wrap(sendBatchNotifications));
+listingRouter.all("/notify-user", wrap(sendNotificationToUser));
+listingRouter.all("/notify", wrap(sendNotificationCallable));
+listingRouter.all("/send-notify", wrap(sendNotification));

@@ -34,9 +34,10 @@ interface CartModelShort {
     vendor_id?: string;
     created_at?: string;
     status?: string;
+    is_admin_decision?: boolean;
     items: CartItemShort[];
     total_amount?: number;
-    book_datetime?: string;
+    book_datetime?: string | admin.firestore.Timestamp;
     duration?: number;
 }
 
@@ -85,12 +86,22 @@ interface CartModel {
     items: ServiceModel[];
     client?: UserData;
     vendor?: UserData;
+    book_datetime?: string;
+    is_admin_decision?: boolean;
+}
+
+// ✅ Grouped bookings response
+interface GroupedBookings {
+    past: CartModel[];
+    today: CartModel[];
+    future: CartModel[];
 }
 
 interface BookingListResponse {
     success: boolean;
     data: {
         bookings: CartModel[];
+        grouped?: GroupedBookings;
         count: number;
         mode: string;
         id: string;
@@ -98,9 +109,108 @@ interface BookingListResponse {
         hasMore: boolean;
         nextCursor?: string;
         totalCount?: number;
+        groupBy?: string;
     };
     error?: string;
     message?: string;
+}
+
+// ============================================================
+// HELPER: Convert Firestore Timestamp to ISO String
+// ============================================================
+
+/**
+ * ✅ Convert Firestore Timestamp or Date to ISO string
+ * Handles both Firestore Timestamp objects and JS Date objects
+ */
+function convertToISOString(value: any): string {
+    if (!value) return '';
+
+    // ✅ If it's a Firestore Timestamp
+    if (value instanceof admin.firestore.Timestamp) {
+        return value.toDate().toISOString();
+    }
+
+    // ✅ If it's already a string
+    if (typeof value === 'string') {
+        return value;
+    }
+
+    // ✅ If it's a Date object
+    if (value instanceof Date) {
+        return value.toISOString();
+    }
+
+    // ✅ Try to parse as date
+    try {
+        const date = new Date(value);
+        if (!isNaN(date.getTime())) {
+            return date.toISOString();
+        }
+    } catch (error) {
+        console.error('Failed to convert value to date:', value, error);
+    }
+
+    return '';
+}
+
+// ============================================================
+// HELPER: Date grouping functions (timezone-safe)
+// ============================================================
+
+/**
+ * ✅ Extract date string from ISO string (YYYY-MM-DD)
+ * Handles both ISO strings and other date formats
+ * No timezone issues - works with string comparison
+ */
+function extractDateString(dateTimeStr: string): string {
+    if (!dateTimeStr) return '';
+
+    try {
+        // ✅ Try to extract YYYY-MM-DD from ISO format (e.g., "2025-11-18T10:43:05.000Z")
+        if (dateTimeStr.includes('T')) {
+            return dateTimeStr.split('T')[0];
+        }
+
+        // ✅ If already in YYYY-MM-DD format
+        if (dateTimeStr.match(/^\d{4}-\d{2}-\d{2}$/)) {
+            return dateTimeStr;
+        }
+
+        // ✅ Try parsing as date and extracting date part
+        const date = new Date(dateTimeStr);
+        if (!isNaN(date.getTime())) {
+            return date.toISOString().split('T')[0];
+        }
+    } catch (error) {
+        console.error('Failed to extract date string:', dateTimeStr, error);
+    }
+
+    return '';
+}
+
+/**
+ * ✅ Get today's date as YYYY-MM-DD string (UTC-based)
+ * ⚠️ CRITICAL: Use UTC methods to avoid timezone issues
+ */
+function getTodayDateString(): string {
+    const now = new Date();
+    const year = now.getUTCFullYear();
+    const month = String(now.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(now.getUTCDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+}
+
+/**
+ * ✅ Compare two date strings (YYYY-MM-DD format)
+ * Returns: -1 if date1 < date2, 0 if equal, 1 if date1 > date2
+ */
+function compareDateStrings(dateStr1: string, dateStr2: string): number {
+    if (!dateStr1 || !dateStr2) return 0;
+
+    if (dateStr1 < dateStr2) return -1;
+    if (dateStr1 > dateStr2) return 1;
+    return 0;
 }
 
 // ============================================================
@@ -232,8 +342,9 @@ export async function getBookingDetailById(req: Request, res: Response) {
  * - status: "PENDING" | "APPROVED" | "CANCELED" | "REJECTED" (optional)
  * - limit: number 1-100 (optional, default 10)
  * - cursor: string for pagination (optional)
- * - sortBy: "created_at" | "book_datetime" | "status" (optional, default "created_at")
+ * - sortBy: "created_at" | "book_datetime" | "status" (optional, default "book_datetime" when grouping)
  * - sortOrder: "asc" | "desc" (optional, default "desc")
+ * - groupBy: "date" (optional, groups bookings by book_datetime: past/today/future)
  */
 export async function getBookingsByMode(req: Request, res: Response): Promise<any> {
     try {
@@ -244,8 +355,17 @@ export async function getBookingsByMode(req: Request, res: Response): Promise<an
         const status = (req.query.status || req.body.status) as string | undefined;
         const cursor = (req.query.cursor || req.body.cursor) as string | undefined;
         const limit = Math.min(parseInt((req.query.limit || req.body.limit || '10') as string), 100);
-        const sortBy = (req.query.sortBy || req.body.sortBy || 'created_at') as string;
+        let sortBy = (req.query.sortBy || req.body.sortBy) as string;
         const sortOrder = (req.query.sortOrder || req.body.sortOrder || 'desc') as 'asc' | 'desc';
+        const groupBy = (req.query.groupBy || req.body.groupBy) as string | undefined;
+
+        // ✅ If grouping by date, automatically use book_datetime for sorting
+        if (groupBy === 'date') {
+            sortBy = 'book_datetime';
+            console.log(`   📅 Grouping by date detected - forcing sortBy: book_datetime`);
+        } else {
+            sortBy = sortBy || 'created_at';
+        }
 
         // ✅ Validate mode
         if (!mode || (mode !== 'client' && mode !== 'vendor')) {
@@ -283,6 +403,7 @@ export async function getBookingsByMode(req: Request, res: Response): Promise<an
         console.log(`   Limit: ${limit}`);
         console.log(`   Cursor: ${cursor || 'none'}`);
         console.log(`   Expand: ${expand}`);
+        console.log(`   Group by: ${groupBy || 'none'}`);
 
         const fieldName = mode === 'client' ? 'client_id' : 'vendor_id';
 
@@ -296,7 +417,7 @@ export async function getBookingsByMode(req: Request, res: Response): Promise<an
             query = query.where('status', '==', status);
         }
 
-        // ✅ Add sorting
+        // ✅ Add sorting by final field (book_datetime if grouping)
         query = query.orderBy(finalSortBy, sortOrder);
 
         // ✅ Handle cursor-based pagination
@@ -333,13 +454,15 @@ export async function getBookingsByMode(req: Request, res: Response): Promise<an
                 success: true,
                 data: {
                     bookings: [],
+                    grouped: groupBy === 'date' ? { past: [], today: [], future: [] } : undefined,
                     count: 0,
                     mode,
                     id,
                     expanded: false,
                     hasMore: false,
                     nextCursor: undefined,
-                    totalCount: 0
+                    totalCount: 0,
+                    groupBy: groupBy || undefined
                 }
             } as BookingListResponse);
         }
@@ -380,6 +503,28 @@ export async function getBookingsByMode(req: Request, res: Response): Promise<an
 
             console.log(`   ✅ Expansion complete\n`);
 
+            // ✅ Group by book_datetime if requested
+            if (groupBy === 'date') {
+                console.log(`   📅 Grouping by book_datetime (date-only, using string comparison)...`);
+                const grouped = groupBookingsByBookDateTime(expandedCarts);
+
+                return res.status(200).json({
+                    success: true,
+                    data: {
+                        bookings: expandedCarts,
+                        grouped,
+                        count: expandedCarts.length,
+                        mode,
+                        id,
+                        expanded: true,
+                        hasMore,
+                        nextCursor,
+                        totalCount: expandedCarts.length,
+                        groupBy
+                    }
+                } as BookingListResponse);
+            }
+
             return res.status(200).json({
                 success: true,
                 data: {
@@ -390,7 +535,8 @@ export async function getBookingsByMode(req: Request, res: Response): Promise<an
                     expanded: true,
                     hasMore,
                     nextCursor,
-                    totalCount: expandedCarts.length
+                    totalCount: expandedCarts.length,
+                    groupBy
                 }
             } as BookingListResponse);
         }
@@ -404,6 +550,28 @@ export async function getBookingsByMode(req: Request, res: Response): Promise<an
 
         console.log(`   ✅ Enrichment complete\n`);
 
+        // ✅ Group by book_datetime if requested
+        if (groupBy === 'date') {
+            console.log(`   📅 Grouping by book_datetime (date-only, using string comparison)...`);
+            const grouped = groupBookingsByBookDateTime(enrichedBookings);
+
+            return res.status(200).json({
+                success: true,
+                data: {
+                    bookings: enrichedBookings,
+                    grouped,
+                    count: enrichedBookings.length,
+                    mode,
+                    id,
+                    expanded: false,
+                    hasMore,
+                    nextCursor,
+                    totalCount: enrichedBookings.length,
+                    groupBy
+                }
+            } as BookingListResponse);
+        }
+
         return res.status(200).json({
             success: true,
             data: {
@@ -414,7 +582,8 @@ export async function getBookingsByMode(req: Request, res: Response): Promise<an
                 expanded: false,
                 hasMore,
                 nextCursor,
-                totalCount: enrichedBookings.length
+                totalCount: enrichedBookings.length,
+                groupBy
             }
         } as BookingListResponse);
 
@@ -431,6 +600,84 @@ export async function getBookingsByMode(req: Request, res: Response): Promise<an
 // ============================================================
 // HELPER FUNCTIONS
 // ============================================================
+
+/**
+ * ✅ Group bookings by book_datetime field ONLY (past, today, future)
+ * Uses date-string comparison to avoid timezone issues
+ *
+ * Grouping logic:
+ * - PAST: booking's date < today's date
+ * - TODAY: booking's date = today's date
+ * - FUTURE: booking's date > today's date
+ */
+function groupBookingsByBookDateTime(bookings: CartModel[]): GroupedBookings {
+    // Get today's date as YYYY-MM-DD string (UTC-based)
+    const todayStr = getTodayDateString();
+
+    const grouped: GroupedBookings = {
+        past: [],
+        today: [],
+        future: [],
+    };
+
+    console.log(`\n📅 GROUPING BOOKINGS BY book_datetime`);
+    console.log(`════════════════════════════════════════`);
+    console.log(`   🕐 Current UTC date: ${todayStr}`);
+    console.log(`   📊 Total bookings to group: ${bookings.length}`);
+    console.log(`════════════════════════════════════════\n`);
+
+    for (const booking of bookings) {
+        // ✅ CRITICAL: Check for book_datetime field
+        if (!booking.book_datetime) {
+            console.warn(`⚠️ Booking ${booking.id} has NO book_datetime - SKIPPING`);
+            continue;
+        }
+
+        try {
+            console.log(`   📍 Booking: ${booking.id}`);
+            console.log(`      Raw book_datetime: ${booking.book_datetime}`);
+
+            // ✅ Extract YYYY-MM-DD from the book_datetime
+            const bookingDateStr = extractDateString(booking.book_datetime);
+
+            if (!bookingDateStr) {
+                console.warn(`   ⚠️ Failed to extract date from: ${booking.book_datetime}`);
+                continue;
+            }
+
+            console.log(`      Extracted date: ${bookingDateStr}`);
+
+            // ✅ Compare date strings directly (no timezone issues)
+            const comparison = compareDateStrings(bookingDateStr, todayStr);
+
+            console.log(`      Comparison: "${bookingDateStr}" vs "${todayStr}"`);
+
+            if (comparison < 0) {
+                console.log(`      Result: PAST ✅`);
+                grouped.past.push(booking);
+            } else if (comparison === 0) {
+                console.log(`      Result: TODAY ✅`);
+                grouped.today.push(booking);
+            } else {
+                console.log(`      Result: FUTURE ✅`);
+                grouped.future.push(booking);
+            }
+            console.log('');
+        } catch (error) {
+            console.error(`❌ Error processing booking ${booking.id}:`, error);
+            console.error(`   book_datetime value: ${booking.book_datetime}`);
+        }
+    }
+
+    console.log(`════════════════════════════════════════`);
+    console.log(`✅ GROUPING COMPLETE:`);
+    console.log(`   📝 Past:   ${grouped.past.length} bookings`);
+    console.log(`   📅 Today:  ${grouped.today.length} bookings`);
+    console.log(`   🔔 Future: ${grouped.future.length} bookings`);
+    console.log(`════════════════════════════════════════\n`);
+
+    return grouped;
+}
 
 /**
  * Fetch user data from the users collection
@@ -465,7 +712,7 @@ async function fetchUserData(userId: string): Promise<UserData | null> {
 }
 
 /**
- * ✅ NEW: Enrich a booking with user and vendor data (short version, no service expansion)
+ * Enrich a booking with user and vendor data (short version, no service expansion)
  * Used for non-expanded bookings in infinite loading
  */
 async function enrichBookingWithUserData(
@@ -478,13 +725,18 @@ async function enrichBookingWithUserData(
         booking.vendor_id ? fetchUserData(booking.vendor_id) : Promise.resolve(null),
     ]);
 
+    // ✅ Convert book_datetime to string
+    const bookDateTimeStr = convertToISOString(booking.book_datetime);
+
     return {
         id: booking.id,
         client_id: booking.client_id,
         vendor_id: booking.vendor_id,
         created_at: booking.created_at,
+        is_admin_decision: booking.is_admin_decision,
         status: booking.status,
-        items: [], // Empty for non-expanded
+        items: [],
+        book_datetime: bookDateTimeStr,
         client: clientData || undefined,
         vendor: vendorData || undefined,
     };
@@ -497,6 +749,7 @@ async function enrichBookingWithUserData(
 async function expandShortCart(shortCart: CartModelShort): Promise<CartModel> {
     console.log(`\n🔄 EXPANDING CART: ${shortCart.id}`);
     console.log(`   Items to expand: ${shortCart.items.length}`);
+    console.log(`   book_datetime: ${shortCart.book_datetime || 'MISSING'}`);
 
     const fullServices: ServiceModel[] = [];
 
@@ -506,6 +759,9 @@ async function expandShortCart(shortCart: CartModelShort): Promise<CartModel> {
         shortCart.client_id ? fetchUserData(shortCart.client_id) : Promise.resolve(null),
         shortCart.vendor_id ? fetchUserData(shortCart.vendor_id) : Promise.resolve(null),
     ]);
+
+    // ✅ Convert book_datetime to string
+    const bookDateTimeStr = convertToISOString(shortCart.book_datetime);
 
     // Validate items
     if (!shortCart.items || shortCart.items.length === 0) {
@@ -517,7 +773,9 @@ async function expandShortCart(shortCart: CartModelShort): Promise<CartModel> {
             vendor_id: shortCart.vendor_id,
             created_at: shortCart.created_at,
             status: shortCart.status,
+            is_admin_decision: shortCart.is_admin_decision,
             items: [],
+            book_datetime: bookDateTimeStr,
             client: clientData || undefined,
             vendor: vendorData || undefined,
         };
@@ -624,7 +882,9 @@ async function expandShortCart(shortCart: CartModelShort): Promise<CartModel> {
         vendor_id: shortCart.vendor_id,
         created_at: shortCart.created_at,
         status: shortCart.status,
+        is_admin_decision: shortCart.is_admin_decision,
         items: fullServices,
+        book_datetime: bookDateTimeStr,
         client: clientData || undefined,
         vendor: vendorData || undefined,
     };
