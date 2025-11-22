@@ -1,4 +1,4 @@
-// listing/book.ts
+// listing/book.ts - WITH POPULATE AT ROOT RESPONSE LEVEL
 
 import { Request, Response } from "express";
 import admin from "firebase-admin";
@@ -31,6 +31,8 @@ interface CartItemShort {
 interface CartModelShort {
     id?: string;
     client_id?: string;
+    payment_id?: string;
+    refund_id?: string;
     vendor_id?: string;
     created_at?: string;
     status?: string;
@@ -39,6 +41,8 @@ interface CartModelShort {
     total_amount?: number;
     book_datetime?: string | admin.firestore.Timestamp;
     duration?: number;
+    formatted_duration?: string;
+    [key: string]: any;
 }
 
 interface Choice {
@@ -59,9 +63,14 @@ interface ServiceVariant {
     id: string;
     name: string;
     price: number;
+    durationValue?: number;
+    durationUnit?: string;
     duration_value?: number;
     duration_unit?: string;
+    duration?: number;
+    formatted_duration?: string;
     options: Option[];
+    [key: string]: any;
 }
 
 interface ServiceModel {
@@ -75,26 +84,48 @@ interface ServiceModel {
     is_active?: boolean;
     created_at?: string;
     updated_at?: string;
+    [key: string]: any;
 }
 
 interface CartModel {
     id?: string;
     client_id?: string;
     vendor_id?: string;
+    payment_id?: string;
+    refund_id?: string;
     created_at?: string;
     status?: string;
     items: ServiceModel[];
     client?: UserData;
+    payement?: any;
+    refund?: any;
     vendor?: UserData;
     book_datetime?: string;
     is_admin_decision?: boolean;
+    duration?: number;
+    formatted_duration?: string;
+    [key: string]: any;
 }
 
-// ✅ Grouped bookings response
 interface GroupedBookings {
     past: CartModel[];
     today: CartModel[];
     future: CartModel[];
+}
+
+/**
+ * ✅ Populate configuration supporting root, items, and response levels
+ *
+ * @example Root level: { from: 'vendors', id: 'vendor_id' }
+ * @example Items level: { from: 'categories', id: 'category_id', path: 'items' }
+ * @example Response level: { from: 'clients', id: 'id', path: 'response', as: 'primaryUser' }
+ */
+interface PopulateConfig {
+    from: string;           // Collection name to fetch from
+    id: string;             // Field containing the ID to lookup
+    fields?: string[];      // Fields to return (undefined = all)
+    as?: string;            // Field name for populated data (defaults to collection name)
+    path?: string;          // Path in nested structure ('items', 'items.variants', 'response')
 }
 
 interface BookingListResponse {
@@ -110,38 +141,117 @@ interface BookingListResponse {
         nextCursor?: string;
         totalCount?: number;
         groupBy?: string;
+        [key: string]: any;  // For response-level populated data
     };
     error?: string;
     message?: string;
 }
 
 // ============================================================
+// DURATION HELPERS
+// ============================================================
+
+function convertToMinutes(value: number | undefined, unit: string | undefined): number {
+    if (!value || !unit) return 0;
+
+    const unitLower = unit.toLowerCase();
+
+    if (['minute', 'minutes', 'min'].includes(unitLower)) {
+        return value;
+    }
+    if (['hour', 'hours', 'heure', 'heures', 'h'].includes(unitLower)) {
+        return value * 60;
+    }
+    if (['day', 'days', 'jour', 'jours', 'j'].includes(unitLower)) {
+        return value * 60 * 24;
+    }
+
+    return value;
+}
+
+function formatDuration(totalMinutes: number): string {
+    if (totalMinutes <= 0) {
+        return '0 min';
+    }
+
+    if (totalMinutes < 60) {
+        return `${totalMinutes} min`;
+    }
+
+    if (totalMinutes < 1440) {
+        const hours = Math.floor(totalMinutes / 60);
+        const minutes = totalMinutes % 60;
+
+        if (minutes === 0) {
+            return `${hours} h`;
+        }
+        return `${hours} h ${minutes} min`;
+    }
+
+    const days = Math.floor(totalMinutes / 1440);
+    const remainingHours = Math.floor((totalMinutes % 1440) / 60);
+
+    if (remainingHours === 0) {
+        return `${days} jour${days > 1 ? 's' : ''}`;
+    }
+
+    return `${days} jour${days > 1 ? 's' : ''} ${remainingHours} h`;
+}
+
+function calculateCartDuration(items: ServiceModel[]): {
+    duration: number;
+    formatted_duration: string
+} {
+    let totalMinutes = 0;
+
+    for (const service of items) {
+        for (const variant of service.variants || []) {
+            const variantDuration = convertToMinutes(
+                (variant as any).durationValue,
+                (variant as any).durationUnit
+            );
+            totalMinutes += variantDuration;
+        }
+    }
+
+    return {
+        duration: totalMinutes,
+        formatted_duration: formatDuration(totalMinutes),
+    };
+}
+
+function enrichVariantWithDuration(variant: ServiceVariant): ServiceVariant {
+    const durationMinutes = convertToMinutes(
+        (variant as any).durationValue,
+        (variant as any).durationUnit
+    );
+
+    return {
+        ...variant,
+        duration: durationMinutes,
+        formatted_duration: formatDuration(durationMinutes),
+    };
+}
+
+// ============================================================
 // HELPER: Convert Firestore Timestamp to ISO String
 // ============================================================
 
-/**
- * ✅ Convert Firestore Timestamp or Date to ISO string
- * Handles both Firestore Timestamp objects and JS Date objects
- */
 function convertToISOString(value: any): string {
     if (!value) return '';
 
-    // ✅ If it's a Firestore Timestamp
     if (value instanceof admin.firestore.Timestamp) {
         return value.toDate().toISOString();
     }
 
-    // ✅ If it's already a string
     if (typeof value === 'string') {
         return value;
     }
 
-    // ✅ If it's a Date object
     if (value instanceof Date) {
         return value.toISOString();
     }
 
-    // ✅ Try to parse as date
     try {
         const date = new Date(value);
         if (!isNaN(date.getTime())) {
@@ -155,29 +265,216 @@ function convertToISOString(value: any): string {
 }
 
 // ============================================================
-// HELPER: Date grouping functions (timezone-safe)
+// POPULATE FEATURE (ROOT, ITEMS, VARIANTS, & RESPONSE)
 // ============================================================
 
 /**
- * ✅ Extract date string from ISO string (YYYY-MM-DD)
- * Handles both ISO strings and other date formats
- * No timezone issues - works with string comparison
+ * ✅ Populate relation from another collection
  */
+async function populateRelation(docId: string | undefined, config: PopulateConfig): Promise<any> {
+    if (!docId) {
+        return null;
+    }
+
+    try {
+        console.log(`   📎 Populating ${config.from} for ID: ${docId}`);
+
+        const doc = await db.collection(config.from).doc(docId).get();
+
+        if (!doc.exists) {
+            console.warn(`   ⚠️ Document not found in ${config.from}: ${docId}`);
+            return null;
+        }
+
+        let data = doc.data();
+
+        // Filter fields if specified
+        if (config.fields && config.fields.length > 0) {
+            const filteredData: any = { id: doc.id };
+            for (const field of config.fields) {
+                if (field in data!) {
+                    filteredData[field] = data![field];
+                }
+            }
+            data = filteredData;
+        } else {
+            data!.id = doc.id;
+        }
+
+        return data;
+
+    } catch (error) {
+        console.error(`   ❌ Error populating ${config.from}:`, error);
+        return null;
+    }
+}
+
+/**
+ * ✅ Populate relation in nested object/array
+ */
+async function populateInPath(data: any, config: PopulateConfig): Promise<any> {
+    if (!config.path) {
+        return data;
+    }
+
+    const pathParts = config.path.split('.');
+    const fieldName = config.id;
+    const asName = config.as || config.from;
+
+    console.log(`   📎 Populating ${config.from} in path: ${config.path}`);
+
+    // Handle 'items' path
+    if (pathParts[0] === 'items' && Array.isArray(data.items)) {
+        if (pathParts.length === 1) {
+            // Populate at items level
+            for (const item of data.items) {
+                const docId = item[fieldName];
+                if (docId) {
+                    const populatedData = await populateRelation(docId, config);
+                    if (populatedData) {
+                        item[asName] = populatedData;
+                    }
+                }
+            }
+        } else if (pathParts[1] === 'variants') {
+            // Populate at items.variants level
+            for (const item of data.items) {
+                if (Array.isArray(item.variants)) {
+                    for (const variant of item.variants) {
+                        const docId = variant[fieldName];
+                        if (docId) {
+                            const populatedData = await populateRelation(docId, config);
+                            if (populatedData) {
+                                variant[asName] = populatedData;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    return data;
+}
+
+/**
+ * ✅ Populate relation at response data level
+ * Special handling for response-level populate
+ */
+async function populateResponseLevel(
+    responseData: any,
+    config: PopulateConfig,
+    mode: string,
+    userId: string
+): Promise<any> {
+    if (config.path !== 'response') {
+        return responseData;
+    }
+
+    const asName = config.as || config.from;
+
+    // If ID field is 'id', use the userId (mode-based)
+    let docId = config.id === 'id' ? userId : (responseData as any)[config.id];
+
+    if (!docId) {
+        console.warn(`   ⚠️ No ID found for response-level populate: ${config.id}`);
+        return responseData;
+    }
+
+    console.log(`   📎 Populating ${config.from} at response level (ID: ${docId})`);
+
+    const populatedData = await populateRelation(docId, config);
+    if (populatedData) {
+        (responseData as any)[asName] = populatedData;
+    }
+
+    return responseData;
+}
+
+/**
+ * ✅ Apply multiple population configs
+ * Supports root, items, variants, and response levels
+ */
+async function populateBooking(
+    booking: CartModel,
+    populateConfigs: PopulateConfig[] | undefined
+): Promise<CartModel> {
+    if (!populateConfigs || populateConfigs.length === 0) {
+        return booking;
+    }
+
+    for (const config of populateConfigs) {
+        try {
+            if (config.path === 'response') {
+                // Skip response-level configs here
+                continue;
+            } else if (config.path) {
+                // Populate in nested path (items, items.variants, etc)
+                booking = await populateInPath(booking, config);
+            } else {
+                // Populate at root level
+                const fieldName = config.id;
+                const docId = (booking as any)[fieldName];
+                const asName = config.as || config.from;
+
+                if (!docId) {
+                    console.warn(`   ⚠️ Field "${fieldName}" not found in booking`);
+                    continue;
+                }
+
+                const populatedData = await populateRelation(docId, config);
+                if (populatedData) {
+                    (booking as any)[asName] = populatedData;
+                }
+            }
+        } catch (error) {
+            console.error(`Error applying populate config for ${config.from}:`, error);
+        }
+    }
+
+    return booking;
+}
+
+/**
+ * ✅ Apply response-level populate configs
+ */
+async function populateResponseData(
+    responseData: any,
+    populateConfigs: PopulateConfig[] | undefined,
+    mode: string,
+    userId: string
+): Promise<any> {
+    if (!populateConfigs || populateConfigs.length === 0) {
+        return responseData;
+    }
+
+    console.log(`   🔗 Applying response-level populate configs...`);
+
+    for (const config of populateConfigs) {
+        if (config.path === 'response') {
+            responseData = await populateResponseLevel(responseData, config, mode, userId);
+        }
+    }
+
+    return responseData;
+}
+
+// ============================================================
+// HELPER: Date grouping functions
+// ============================================================
+
 function extractDateString(dateTimeStr: string): string {
     if (!dateTimeStr) return '';
 
     try {
-        // ✅ Try to extract YYYY-MM-DD from ISO format (e.g., "2025-11-18T10:43:05.000Z")
         if (dateTimeStr.includes('T')) {
             return dateTimeStr.split('T')[0];
         }
 
-        // ✅ If already in YYYY-MM-DD format
         if (dateTimeStr.match(/^\d{4}-\d{2}-\d{2}$/)) {
             return dateTimeStr;
         }
 
-        // ✅ Try parsing as date and extracting date part
         const date = new Date(dateTimeStr);
         if (!isNaN(date.getTime())) {
             return date.toISOString().split('T')[0];
@@ -189,10 +486,6 @@ function extractDateString(dateTimeStr: string): string {
     return '';
 }
 
-/**
- * ✅ Get today's date as YYYY-MM-DD string (UTC-based)
- * ⚠️ CRITICAL: Use UTC methods to avoid timezone issues
- */
 function getTodayDateString(): string {
     const now = new Date();
     const year = now.getUTCFullYear();
@@ -201,10 +494,6 @@ function getTodayDateString(): string {
     return `${year}-${month}-${day}`;
 }
 
-/**
- * ✅ Compare two date strings (YYYY-MM-DD format)
- * Returns: -1 if date1 < date2, 0 if equal, 1 if date1 > date2
- */
 function compareDateStrings(dateStr1: string, dateStr2: string): number {
     if (!dateStr1 || !dateStr2) return 0;
 
@@ -214,20 +503,20 @@ function compareDateStrings(dateStr1: string, dateStr2: string): number {
 }
 
 // ============================================================
-// ENDPOINTS
+// ENDPOINTS - ALL PUBLIC (NO AUTHENTICATION REQUIRED)
 // ============================================================
 
 /**
- * POST /api/v1/listing/booking-detail
+ * 🔓 PUBLIC ENDPOINT - No authorization required
+ * Fetch booking detail by ID or expand cart data
  *
- * Expand a short cart/booking model to full detailed version
- *
- * Request body:
- * { bookingId: "xxx" } OR { cartData: {...} }
+ * @body bookingId - (optional) Booking document ID to fetch
+ * @body cartData - (optional) Cart data to expand
+ * @body populate - (optional) Array of PopulateConfig objects for data enrichment
  */
 export async function getBookingDetail(req: Request, res: Response) {
     try {
-        const { bookingId, cartData } = req.body;
+        const { bookingId, cartData, populate } = req.body;
         let shortCart: CartModelShort;
 
         if (bookingId) {
@@ -263,7 +552,12 @@ export async function getBookingDetail(req: Request, res: Response) {
             });
         }
 
-        const fullCart = await expandShortCart(shortCart);
+        let fullCart = await expandShortCart(shortCart);
+
+        // ✅ Apply populate configs (root, items, variants)
+        if (populate && Array.isArray(populate)) {
+            fullCart = await populateBooking(fullCart, populate);
+        }
 
         return res.status(200).json({
             success: true,
@@ -281,13 +575,16 @@ export async function getBookingDetail(req: Request, res: Response) {
 }
 
 /**
- * GET /api/v1/listing/booking-detail-by-id?bookingId=xxx
+ * 🔓 PUBLIC ENDPOINT - No authorization required
+ * Fetch a single booking by ID with optional population
  *
- * Fetch and expand booking by ID
+ * @query bookingId - (required) Booking document ID
+ * @query populate - (optional) JSON string of PopulateConfig array
  */
 export async function getBookingDetailById(req: Request, res: Response) {
     try {
         const bookingId = req.query.bookingId as string;
+        const populate = req.query.populate as string | undefined;
 
         if (!bookingId) {
             return res.status(400).json({
@@ -313,7 +610,33 @@ export async function getBookingDetailById(req: Request, res: Response) {
         const shortCart = bookingDoc.data() as CartModelShort;
         shortCart.id = bookingDoc.id;
 
-        const fullCart = await expandShortCart(shortCart);
+        let fullCart = await expandShortCart(shortCart);
+
+        // ✅ Apply populate configs (root, items, variants, response)
+        if (populate) {
+            try {
+                const populateConfigs: PopulateConfig[] = JSON.parse(populate);
+                fullCart = await populateBooking(fullCart, populateConfigs);
+            } catch (e) {
+                console.warn('Invalid populate parameter:', e);
+            }
+        }
+
+        const [clientData, vendorData] = await Promise.all([
+            shortCart.client_id ? fetchUserData(shortCart.client_id) : Promise.resolve(undefined),
+            shortCart.vendor_id ? fetchUserData(shortCart.vendor_id) : Promise.resolve(undefined),
+        ]);
+
+        fullCart.client = clientData ?? {};
+        fullCart.vendor = vendorData ?? {};
+
+        const [paymentData, refundData] = await Promise.all([
+            shortCart.payment_id ? fetchPayData(shortCart.payment_id) : Promise.resolve(undefined),
+            shortCart.refund_id ? fetchPayData(shortCart.refund_id) : Promise.resolve(undefined),
+        ]);
+
+        fullCart.refund = refundData ?? {};
+        fullCart.payment = paymentData ?? {};
 
         return res.status(200).json({
             success: true,
@@ -331,24 +654,22 @@ export async function getBookingDetailById(req: Request, res: Response) {
 }
 
 /**
- * GET/POST /api/v1/listing/bookings-by-mode
+ * 🔓 PUBLIC ENDPOINT - No authorization required
+ * Fetch bookings by mode (client or vendor) with pagination, filtering, and optional population
  *
- * Fetch bookings by client_id or vendor_id with pagination & infinite loading
- *
- * Query params or body:
- * - mode: "client" | "vendor" (REQUIRED)
- * - id: the client_id or vendor_id (REQUIRED)
- * - expand: "true" | "false" (optional, default false)
- * - status: "PENDING" | "APPROVED" | "CANCELED" | "REJECTED" (optional)
- * - limit: number 1-100 (optional, default 10)
- * - cursor: string for pagination (optional)
- * - sortBy: "created_at" | "book_datetime" | "status" (optional, default "book_datetime" when grouping)
- * - sortOrder: "asc" | "desc" (optional, default "desc")
- * - groupBy: "date" (optional, groups bookings by book_datetime: past/today/future)
+ * @query/body mode - (required) 'client' or 'vendor'
+ * @query/body id - (required) User ID (client_id or vendor_id)
+ * @query/body expand - (optional) 'true' to expand services, 'false' to enrich with user data
+ * @query/body status - (optional) Filter by booking status
+ * @query/body cursor - (optional) Pagination cursor
+ * @query/body limit - (optional) Results per page (1-100, default 10)
+ * @query/body sortBy - (optional) Field to sort by (created_at, book_datetime, status)
+ * @query/body sortOrder - (optional) 'asc' or 'desc'
+ * @query/body groupBy - (optional) 'date' to group bookings by date
+ * @query/body populate - (optional) JSON string of PopulateConfig array
  */
 export async function getBookingsByMode(req: Request, res: Response): Promise<any> {
     try {
-        // ✅ Accept both query params (GET) and body (POST)
         const mode = (req.query.mode || req.body.mode) as string;
         const id = (req.query.id || req.body.id) as string;
         const expand = (req.query.expand || req.body.expand) === 'true';
@@ -359,7 +680,19 @@ export async function getBookingsByMode(req: Request, res: Response): Promise<an
         const sortOrder = (req.query.sortOrder || req.body.sortOrder || 'desc') as 'asc' | 'desc';
         const groupBy = (req.query.groupBy || req.body.groupBy) as string | undefined;
 
-        // ✅ If grouping by date, automatically use book_datetime for sorting
+        // ✅ Parse populate parameter
+        let populateConfigs: PopulateConfig[] | undefined;
+        const populateParam = req.query.populate || req.body.populate;
+        if (populateParam) {
+            try {
+                populateConfigs = typeof populateParam === 'string'
+                    ? JSON.parse(populateParam)
+                    : populateParam;
+            } catch (e) {
+                console.warn('Invalid populate parameter:', e);
+            }
+        }
+
         if (groupBy === 'date') {
             sortBy = 'book_datetime';
             console.log(`   📅 Grouping by date detected - forcing sortBy: book_datetime`);
@@ -367,7 +700,6 @@ export async function getBookingsByMode(req: Request, res: Response): Promise<an
             sortBy = sortBy || 'created_at';
         }
 
-        // ✅ Validate mode
         if (!mode || (mode !== 'client' && mode !== 'vendor')) {
             return res.status(400).json({
                 success: false,
@@ -375,7 +707,6 @@ export async function getBookingsByMode(req: Request, res: Response): Promise<an
             });
         }
 
-        // ✅ Validate id
         if (!id) {
             return res.status(400).json({
                 success: false,
@@ -383,7 +714,6 @@ export async function getBookingsByMode(req: Request, res: Response): Promise<an
             });
         }
 
-        // ✅ Validate limit
         if (limit < 1 || limit > 100) {
             return res.status(400).json({
                 success: false,
@@ -391,40 +721,28 @@ export async function getBookingsByMode(req: Request, res: Response): Promise<an
             });
         }
 
-        // ✅ Validate sortBy
         const validSortFields = ['created_at', 'book_datetime', 'status'];
         const finalSortBy = validSortFields.includes(sortBy) ? sortBy : 'created_at';
 
         console.log(`\n🔍 Fetching bookings:`);
         console.log(`   Mode: ${mode}`);
         console.log(`   ID: ${id}`);
-        console.log(`   Status: ${status || 'all'}`);
-        console.log(`   Sort: ${finalSortBy} ${sortOrder}`);
-        console.log(`   Limit: ${limit}`);
-        console.log(`   Cursor: ${cursor || 'none'}`);
-        console.log(`   Expand: ${expand}`);
-        console.log(`   Group by: ${groupBy || 'none'}`);
+        console.log(`   Populate configs: ${populateConfigs?.length || 0}`);
 
         const fieldName = mode === 'client' ? 'client_id' : 'vendor_id';
 
-        // ✅ Build query
         let query = db
             .collection(BOOKING_COLLECTION)
             .where(fieldName, '==', id);
 
-        // ✅ Add status filter if provided
         if (status) {
             query = query.where('status', '==', status);
         }
 
-        // ✅ Add sorting by final field (book_datetime if grouping)
         query = query.orderBy(finalSortBy, sortOrder);
 
-        // ✅ Handle cursor-based pagination
         if (cursor) {
             try {
-                console.log(`   Using cursor: ${cursor}`);
-
                 const cursorDoc = await db
                     .collection(BOOKING_COLLECTION)
                     .doc(cursor)
@@ -432,159 +750,140 @@ export async function getBookingsByMode(req: Request, res: Response): Promise<an
 
                 if (cursorDoc.exists) {
                     const cursorValue = cursorDoc.get(finalSortBy);
-                    console.log(`   Cursor value: ${cursorValue}`);
                     query = query.startAfter(cursorValue);
-                } else {
-                    console.warn(`   ⚠️ Cursor document not found`);
                 }
             } catch (error) {
-                console.warn('   ⚠️ Invalid cursor, starting from beginning:', error);
+                console.warn('⚠️ Invalid cursor:', error);
             }
         }
 
-        // ✅ Fetch limit + 1 to determine if there are more results
         const snapshot = await query.limit(limit + 1).get();
 
-        console.log(`   📊 Documents fetched: ${snapshot.docs.length}`);
-
         if (snapshot.empty) {
-            console.log(`   ℹ️ No bookings found`);
+            let responseData: any = {
+                bookings: [],
+                grouped: groupBy === 'date' ? { past: [], today: [], future: [] } : undefined,
+                count: 0,
+                mode,
+                id,
+                expanded: expand,
+                hasMore: false,
+                nextCursor: undefined,
+                totalCount: 0,
+                groupBy: groupBy || undefined
+            };
+
+            // ✅ Apply response-level populate
+            if (populateConfigs) {
+                responseData = await populateResponseData(responseData, populateConfigs, mode, id);
+            }
 
             return res.status(200).json({
                 success: true,
-                data: {
-                    bookings: [],
-                    grouped: groupBy === 'date' ? { past: [], today: [], future: [] } : undefined,
-                    count: 0,
-                    mode,
-                    id,
-                    expanded: false,
-                    hasMore: false,
-                    nextCursor: undefined,
-                    totalCount: 0,
-                    groupBy: groupBy || undefined
-                }
+                data: responseData
             } as BookingListResponse);
         }
 
-        // ✅ Check if there are more results
         const docs = snapshot.docs;
         const hasMore = docs.length > limit;
         const bookingDocs = hasMore ? docs.slice(0, limit) : docs;
 
-        console.log(`   ✅ Has more: ${hasMore}`);
-
-        // ✅ Convert to short carts
         const shortCarts: CartModelShort[] = bookingDocs.map(doc => {
             const data = doc.data() as CartModelShort;
             data.id = doc.id;
             return data;
         });
 
-        // ✅ Determine next cursor for infinite loading
         const nextCursor = hasMore && bookingDocs.length > 0
             ? bookingDocs[bookingDocs.length - 1].id
             : undefined;
 
-        // ✅ If expand is true, expand all bookings with full service data
         if (expand) {
             console.log(`   📦 Expanding ${shortCarts.length} bookings...`);
 
-            const expandedCarts: CartModel[] = [];
+            let expandedCarts: CartModel[] = [];
 
             for (const shortCart of shortCarts) {
                 try {
-                    const fullCart = await expandShortCart(shortCart);
+                    let fullCart = await expandShortCart(shortCart);
+
+                    // ✅ Apply populate configs (root, items, variants)
+                    if (populateConfigs) {
+                        fullCart = await populateBooking(fullCart, populateConfigs);
+                    }
+
                     expandedCarts.push(fullCart);
                 } catch (error) {
-                    console.error(`   ❌ Error expanding booking ${shortCart.id}:`, error);
+                    console.error(`❌ Error expanding booking ${shortCart.id}:`, error);
                 }
             }
 
-            console.log(`   ✅ Expansion complete\n`);
+            let responseData: any = {
+                bookings: expandedCarts,
+                count: expandedCarts.length,
+                mode,
+                id,
+                expanded: true,
+                hasMore,
+                nextCursor,
+                totalCount: expandedCarts.length,
+                groupBy
+            };
 
-            // ✅ Group by book_datetime if requested
             if (groupBy === 'date') {
-                console.log(`   📅 Grouping by book_datetime (date-only, using string comparison)...`);
                 const grouped = groupBookingsByBookDateTime(expandedCarts);
+                responseData.grouped = grouped;
+            }
 
-                return res.status(200).json({
-                    success: true,
-                    data: {
-                        bookings: expandedCarts,
-                        grouped,
-                        count: expandedCarts.length,
-                        mode,
-                        id,
-                        expanded: true,
-                        hasMore,
-                        nextCursor,
-                        totalCount: expandedCarts.length,
-                        groupBy
-                    }
-                } as BookingListResponse);
+            // ✅ Apply response-level populate
+            if (populateConfigs) {
+                responseData = await populateResponseData(responseData, populateConfigs, mode, id);
             }
 
             return res.status(200).json({
                 success: true,
-                data: {
-                    bookings: expandedCarts,
-                    count: expandedCarts.length,
-                    mode,
-                    id,
-                    expanded: true,
-                    hasMore,
-                    nextCursor,
-                    totalCount: expandedCarts.length,
-                    groupBy
-                }
+                data: responseData
             } as BookingListResponse);
         }
 
-        // ✅ For non-expanded, enrich with user data from users collection
-        console.log(`   👤 Enriching ${shortCarts.length} bookings with user data...`);
+        console.log(`   👤 Enriching ${shortCarts.length} bookings...`);
 
-        const enrichedBookings = await Promise.all(
+        let enrichedBookings = await Promise.all(
             shortCarts.map(booking => enrichBookingWithUserData(booking))
         );
 
-        console.log(`   ✅ Enrichment complete\n`);
+        // ✅ Apply populate configs to enriched bookings (root, items, variants)
+        if (populateConfigs) {
+            enrichedBookings = await Promise.all(
+                enrichedBookings.map(booking => populateBooking(booking, populateConfigs))
+            );
+        }
 
-        // ✅ Group by book_datetime if requested
+        let responseData: any = {
+            bookings: enrichedBookings,
+            count: enrichedBookings.length,
+            mode,
+            id,
+            expanded: false,
+            hasMore,
+            nextCursor,
+            totalCount: enrichedBookings.length,
+            groupBy
+        };
+
         if (groupBy === 'date') {
-            console.log(`   📅 Grouping by book_datetime (date-only, using string comparison)...`);
             const grouped = groupBookingsByBookDateTime(enrichedBookings);
+            responseData.grouped = grouped;
+        }
 
-            return res.status(200).json({
-                success: true,
-                data: {
-                    bookings: enrichedBookings,
-                    grouped,
-                    count: enrichedBookings.length,
-                    mode,
-                    id,
-                    expanded: false,
-                    hasMore,
-                    nextCursor,
-                    totalCount: enrichedBookings.length,
-                    groupBy
-                }
-            } as BookingListResponse);
+        // ✅ Apply response-level populate
+        if (populateConfigs) {
+            responseData = await populateResponseData(responseData, populateConfigs, mode, id);
         }
 
         return res.status(200).json({
             success: true,
-            data: {
-                bookings: enrichedBookings,
-                count: enrichedBookings.length,
-                mode,
-                id,
-                expanded: false,
-                hasMore,
-                nextCursor,
-                totalCount: enrichedBookings.length,
-                groupBy
-            }
+            data: responseData
         } as BookingListResponse);
 
     } catch (error: any) {
@@ -601,17 +900,7 @@ export async function getBookingsByMode(req: Request, res: Response): Promise<an
 // HELPER FUNCTIONS
 // ============================================================
 
-/**
- * ✅ Group bookings by book_datetime field ONLY (past, today, future)
- * Uses date-string comparison to avoid timezone issues
- *
- * Grouping logic:
- * - PAST: booking's date < today's date
- * - TODAY: booking's date = today's date
- * - FUTURE: booking's date > today's date
- */
 function groupBookingsByBookDateTime(bookings: CartModel[]): GroupedBookings {
-    // Get today's date as YYYY-MM-DD string (UTC-based)
     const todayStr = getTodayDateString();
 
     const grouped: GroupedBookings = {
@@ -620,73 +909,34 @@ function groupBookingsByBookDateTime(bookings: CartModel[]): GroupedBookings {
         future: [],
     };
 
-    console.log(`\n📅 GROUPING BOOKINGS BY book_datetime`);
-    console.log(`════════════════════════════════════════`);
-    console.log(`   🕐 Current UTC date: ${todayStr}`);
-    console.log(`   📊 Total bookings to group: ${bookings.length}`);
-    console.log(`════════════════════════════════════════\n`);
-
     for (const booking of bookings) {
-        // ✅ CRITICAL: Check for book_datetime field
-        if (!booking.book_datetime) {
-            console.warn(`⚠️ Booking ${booking.id} has NO book_datetime - SKIPPING`);
-            continue;
-        }
+        if (!booking.book_datetime) continue;
 
         try {
-            console.log(`   📍 Booking: ${booking.id}`);
-            console.log(`      Raw book_datetime: ${booking.book_datetime}`);
-
-            // ✅ Extract YYYY-MM-DD from the book_datetime
             const bookingDateStr = extractDateString(booking.book_datetime);
 
-            if (!bookingDateStr) {
-                console.warn(`   ⚠️ Failed to extract date from: ${booking.book_datetime}`);
-                continue;
-            }
+            if (!bookingDateStr) continue;
 
-            console.log(`      Extracted date: ${bookingDateStr}`);
-
-            // ✅ Compare date strings directly (no timezone issues)
             const comparison = compareDateStrings(bookingDateStr, todayStr);
 
-            console.log(`      Comparison: "${bookingDateStr}" vs "${todayStr}"`);
-
             if (comparison < 0) {
-                console.log(`      Result: PAST ✅`);
                 grouped.past.push(booking);
             } else if (comparison === 0) {
-                console.log(`      Result: TODAY ✅`);
                 grouped.today.push(booking);
             } else {
-                console.log(`      Result: FUTURE ✅`);
                 grouped.future.push(booking);
             }
-            console.log('');
         } catch (error) {
-            console.error(`❌ Error processing booking ${booking.id}:`, error);
-            console.error(`   book_datetime value: ${booking.book_datetime}`);
+            console.error(`Error processing booking ${booking.id}:`, error);
         }
     }
-
-    console.log(`════════════════════════════════════════`);
-    console.log(`✅ GROUPING COMPLETE:`);
-    console.log(`   📝 Past:   ${grouped.past.length} bookings`);
-    console.log(`   📅 Today:  ${grouped.today.length} bookings`);
-    console.log(`   🔔 Future: ${grouped.future.length} bookings`);
-    console.log(`════════════════════════════════════════\n`);
 
     return grouped;
 }
 
-/**
- * Fetch user data from the users collection
- */
 async function fetchUserData(userId: string): Promise<UserData | null> {
     try {
         if (!userId) return null;
-
-        console.log(`      👤 Fetching user: ${userId}`);
 
         const userDoc = await db
             .collection(USERS_COLLECTION)
@@ -694,101 +944,80 @@ async function fetchUserData(userId: string): Promise<UserData | null> {
             .get();
 
         if (!userDoc.exists) {
-            console.warn(`      ⚠️ User not found: ${userId}`);
             return null;
         }
 
         const userData = userDoc.data() as UserData;
         userData.uid = userDoc.id;
 
-        console.log(`      ✅ User found: ${userData.name}`);
-
         return userData;
 
     } catch (error) {
-        console.error(`      ❌ Error fetching user ${userId}:`, error);
+        console.error(`Error fetching user ${userId}:`, error);
         return null;
     }
 }
 
-/**
- * Enrich a booking with user and vendor data (short version, no service expansion)
- * Used for non-expanded bookings in infinite loading
- */
+async function fetchPayData(userId: string): Promise<UserData | null> {
+    try {
+        if (!userId) return null;
+
+        const userDoc = await db
+            .collection("payments")
+            .doc(userId)
+            .get();
+
+        if (!userDoc.exists) {
+            return null;
+        }
+
+        const userData = userDoc.data() as any;
+        userData.uid = userDoc.id;
+
+        return userData;
+
+    } catch (error) {
+        console.error(`Error fetching user ${userId}:`, error);
+        return null;
+    }
+}
+
 async function enrichBookingWithUserData(
     booking: CartModelShort
 ): Promise<CartModel> {
-    console.log(`      Enriching booking: ${booking.id}`);
+    const fullCart = await expandShortCart(booking);
 
     const [clientData, vendorData] = await Promise.all([
         booking.client_id ? fetchUserData(booking.client_id) : Promise.resolve(null),
         booking.vendor_id ? fetchUserData(booking.vendor_id) : Promise.resolve(null),
     ]);
 
-    // ✅ Convert book_datetime to string
-    const bookDateTimeStr = convertToISOString(booking.book_datetime);
-
     return {
-        id: booking.id,
-        client_id: booking.client_id,
-        vendor_id: booking.vendor_id,
-        created_at: booking.created_at,
-        is_admin_decision: booking.is_admin_decision,
-        status: booking.status,
-        items: [],
-        book_datetime: bookDateTimeStr,
+        ...fullCart,
         client: clientData || undefined,
         vendor: vendorData || undefined,
     };
 }
 
-/**
- * Expand a CartModelShort to full CartModel by fetching service details
- * Also fetches client and vendor user data from users collection
- */
 async function expandShortCart(shortCart: CartModelShort): Promise<CartModel> {
-    console.log(`\n🔄 EXPANDING CART: ${shortCart.id}`);
-    console.log(`   Items to expand: ${shortCart.items.length}`);
-    console.log(`   book_datetime: ${shortCart.book_datetime || 'MISSING'}`);
-
     const fullServices: ServiceModel[] = [];
 
-    // ✅ Fetch client and vendor data from users collection
-    console.log(`   👤 Fetching user data...`);
-    const [clientData, vendorData] = await Promise.all([
-        shortCart.client_id ? fetchUserData(shortCart.client_id) : Promise.resolve(null),
-        shortCart.vendor_id ? fetchUserData(shortCart.vendor_id) : Promise.resolve(null),
-    ]);
-
-    // ✅ Convert book_datetime to string
     const bookDateTimeStr = convertToISOString(shortCart.book_datetime);
 
-    // Validate items
     if (!shortCart.items || shortCart.items.length === 0) {
-        console.warn('   ⚠️ No items in cart');
-
         return {
-            id: shortCart.id,
-            client_id: shortCart.client_id,
-            vendor_id: shortCart.vendor_id,
-            created_at: shortCart.created_at,
-            status: shortCart.status,
-            is_admin_decision: shortCart.is_admin_decision,
+            ...shortCart,
             items: [],
             book_datetime: bookDateTimeStr,
-            client: clientData || undefined,
-            vendor: vendorData || undefined,
+            duration: 0,
+            formatted_duration: '0 min',
         };
     }
 
-    // Group items by service_id
     const serviceGroups = new Map<string, CartItemShort[]>();
 
     for (const item of shortCart.items) {
-        if (!item.service_id) {
-            console.warn('   ⚠️ Cart item has no service_id:', item);
-            continue;
-        }
+        if (!item.service_id) continue;
 
         if (!serviceGroups.has(item.service_id)) {
             serviceGroups.set(item.service_id, []);
@@ -796,58 +1025,36 @@ async function expandShortCart(shortCart: CartModelShort): Promise<CartModel> {
         serviceGroups.get(item.service_id)!.push(item);
     }
 
-    console.log(`   📦 Found ${serviceGroups.size} unique services`);
-
-    // Fetch and expand each service
     for (const [serviceId, cartItems] of serviceGroups.entries()) {
         try {
-            console.log(`\n   🔍 Fetching service: ${serviceId}`);
-
             const serviceDoc = await db
                 .collection(SERVICES_COLLECTION)
                 .doc(serviceId)
                 .get();
 
-            if (!serviceDoc.exists) {
-                console.error(`   ❌ Service not found: ${serviceId}`);
-                continue;
-            }
+            if (!serviceDoc.exists) continue;
 
             const serviceData = serviceDoc.data() as ServiceModel;
             serviceData.id = serviceDoc.id;
 
-            console.log(`   ✅ Service found: ${serviceData.name}`);
-            console.log(`      Variants: ${serviceData.variants.length} | Cart items: ${cartItems.length}`);
-
-            // Process each cart item for this service
             const selectedVariants: ServiceVariant[] = [];
 
             for (const cartItem of cartItems) {
-                console.log(`      📌 Variant: ${cartItem.variant_id}`);
-
-                if (!cartItem.variant_id) {
-                    console.warn(`      ⚠️ No variant_id`);
-                    continue;
-                }
+                if (!cartItem.variant_id) continue;
 
                 const variant = serviceData.variants.find(v => v.id === cartItem.variant_id);
 
-                if (!variant) {
-                    console.error(`      ❌ Variant not found`);
-                    continue;
-                }
-
-                console.log(`      ✅ ${variant.name}`);
+                if (!variant) continue;
 
                 const configuredVariant = configureVariantOptions(
                     variant,
                     cartItem.selected_options || {}
                 );
 
-                selectedVariants.push(configuredVariant);
-            }
+                const variantWithDuration = enrichVariantWithDuration(configuredVariant);
 
-            console.log(`   📊 Selected variants: ${selectedVariants.length}`);
+                selectedVariants.push(variantWithDuration);
+            }
 
             if (selectedVariants.length > 0) {
                 const serviceWithVariants: ServiceModel = {
@@ -864,35 +1071,24 @@ async function expandShortCart(shortCart: CartModelShort): Promise<CartModel> {
                 };
 
                 fullServices.push(serviceWithVariants);
-                console.log(`   ✅ Service added`);
-            } else {
-                console.warn(`   ⚠️ No variants selected`);
             }
 
         } catch (error) {
-            console.error(`   ❌ Error processing service ${serviceId}:`, error);
+            console.error(`Error processing service ${serviceId}:`, error);
         }
     }
 
-    console.log(`\n✅ EXPANSION COMPLETE: ${fullServices.length} services\n`);
+    const { duration, formatted_duration } = calculateCartDuration(fullServices);
 
     return {
-        id: shortCart.id,
-        client_id: shortCart.client_id,
-        vendor_id: shortCart.vendor_id,
-        created_at: shortCart.created_at,
-        status: shortCart.status,
-        is_admin_decision: shortCart.is_admin_decision,
+        ...shortCart,
         items: fullServices,
         book_datetime: bookDateTimeStr,
-        client: clientData || undefined,
-        vendor: vendorData || undefined,
+        duration,
+        formatted_duration,
     };
 }
 
-/**
- * Configure variant options with selected choices
- */
 function configureVariantOptions(
     variant: ServiceVariant,
     selectedOptions: { [optionId: string]: string }
@@ -901,8 +1097,8 @@ function configureVariantOptions(
         id: variant.id,
         name: variant.name,
         price: variant.price,
-        duration_value: variant.duration_value,
-        duration_unit: variant.duration_unit,
+        durationValue: (variant as any).durationValue,
+        durationUnit: (variant as any).durationUnit,
         options: [],
     };
 
@@ -930,3 +1126,9 @@ function configureVariantOptions(
 
     return configuredVariant;
 }
+
+export default {
+    getBookingDetail,
+    getBookingDetailById,
+    getBookingsByMode,
+};
