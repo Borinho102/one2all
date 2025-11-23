@@ -27,7 +27,23 @@ import {
     sendNotificationToUser
 } from "../../listing/alert";
 
+import {
+    userGetPayments,
+    getPaymentDetails,
+    vendorGetPayments,
+    requestRefund, createPaymentIntent, stripeWebhook
+} from "../../listing/pay";
+
 export const listingRouter = Router();
+
+
+listingRouter.all("/pay/user", wrap(userGetPayments));
+listingRouter.all("/pay/info", wrap(getPaymentDetails));
+listingRouter.all("/pay/vendor", wrap(vendorGetPayments));
+listingRouter.all("/pay/refund", wrap(requestRefund));
+listingRouter.all("/pay/intent", wrap(createPaymentIntent));
+listingRouter.all("/pay/webhook", wrap(stripeWebhook));
+
 
 /**
  * @openapi

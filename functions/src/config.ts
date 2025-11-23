@@ -16,6 +16,8 @@ interface EmailConfig {
 
 interface StripeConfig {
     apiKey: string;
+    secretKey: string;
+    webhookKey: string;
 }
 
 export interface AppConfig {
@@ -39,6 +41,8 @@ const config: AppConfig = {
     },
     stripe: {
         apiKey: process.env.STRIPE_API_KEY || '',
+        secretKey: process.env.STRIPE_SECRET_KEY || '',
+        webhookKey: process.env.STRIPE_WEBHOOK_KEY || '',
     },
     environment: (process.env.NODE_ENV as 'development' | 'production' | 'test') || 'development',
     isDevelopment: process.env.NODE_ENV === 'development',

@@ -3,7 +3,10 @@ import * as admin from "firebase-admin";
 import { Request, Response } from "express";
 import config from '../../config';
 
-// admin.initializeApp();
+// Ensure admin is initialized if not already done elsewhere
+if (admin.apps.length === 0) {
+    admin.initializeApp();
+}
 
 // ============ Interfaces ============
 
@@ -40,7 +43,6 @@ type NotificationCallableData = NotificationRequest & { apiKey?: string };
 
 // ============ Configuration ============
 
-// Control debug info in responses - always include full verbose debug
 const INCLUDE_DEBUG_INFO = true;
 const VERBOSE_DEBUG = true;
 
@@ -50,19 +52,12 @@ const logger = functions.logger;
 
 const getTimestamp = (): string => new Date().toISOString();
 
-/**
- * Helper to mask sensitive values for logging
- * Shows first 10 and last 5 chars, hides middle
- */
 const maskValue = (value: string | undefined): string => {
     if (!value) return "EMPTY/UNDEFINED";
     if (value.length <= 15) return value;
     return `${value.substring(0, 10)}...${value.substring(value.length - 5)}`;
 };
 
-/**
- * Get detailed debugging information
- */
 const getDebugInfo = () => {
     return {
         timestamp: getTimestamp(),
@@ -87,9 +82,6 @@ const getDebugInfo = () => {
     };
 };
 
-/**
- * Build response with optional debug info
- */
 const buildDebugResponse = (
     includeDebug: boolean = INCLUDE_DEBUG_INFO,
     verbose: boolean = VERBOSE_DEBUG
@@ -99,15 +91,12 @@ const buildDebugResponse = (
     const debug = getDebugInfo();
 
     if (!verbose) {
-        // In production, only include essential debug info
         return {
             timestamp: debug.timestamp,
             environment: debug.environment.nodeEnv,
             region: debug.runtime.region,
         };
     }
-
-    // In development, include full debug info
     return debug;
 };
 
@@ -179,19 +168,21 @@ const getUserFCMToken = async (userId: string): Promise<string> => {
 
     const userData = userDoc.data() as UserDocument | undefined;
 
-    console.log("User Data", userData)
+    // console.log("User Data", userData)
 
     const fcmToken = userData?.fcm_token;
 
     if (!fcmToken) {
         throw new functions.https.HttpsError(
             "failed-precondition",
-            "User FCM token is not available. User may not have app installed."
+            "User FCM token is not available. User may not have app installed or hasn't granted permission."
         );
     }
 
     return fcmToken;
 };
+
+// ============ CORE SENDING FUNCTIONS ============
 
 const sendNotificationToTopic = async (
     title: string,
@@ -211,6 +202,57 @@ const sendNotificationToTopic = async (
     logger.info(`Sending notification to topic: ${topic}`);
     const messageId = await admin.messaging().send(message);
     return messageId;
+};
+
+// Internal function - used by other endpoints
+// UPDATED: Now handles invalid token errors gracefully
+const sendNotificationToUserInternal = async (
+    title: string,
+    body: string,
+    customData: Record<string, string>,
+    userId: string
+): Promise<string> => {
+    const fcmToken = await getUserFCMToken(userId);
+
+    const message: admin.messaging.Message = {
+        notification: {
+            title,
+            body,
+        },
+        data: customData,
+        token: fcmToken,
+    };
+
+    logger.info(`Sending notification to user: ${userId}`);
+
+    try {
+        const messageId = await admin.messaging().send(message);
+        return messageId;
+    } catch (error: any) {
+        // Handle Invalid Token Error
+        if (error.code === 'messaging/registration-token-not-registered' ||
+            error.code === 'messaging/invalid-registration-token') {
+
+            logger.warn(`❌ Invalid FCM Token for user ${userId}. Removing token from DB.`);
+
+            // Clean up the invalid token to prevent future errors
+            await admin.firestore()
+                .collection("users")
+                .doc(userId)
+                .update({
+                    fcm_token: admin.firestore.FieldValue.delete(),
+                    updatedAt: admin.firestore.FieldValue.serverTimestamp()
+                });
+
+            throw new functions.https.HttpsError(
+                "not-found",
+                "User's notification token is no longer valid (App may be uninstalled)."
+            );
+        }
+
+        // Re-throw other errors
+        throw error;
+    }
 };
 
 // ============ Callable Function ============
@@ -307,29 +349,6 @@ export const sendNotificationCallable = functions.https.onCall(
         }
     }
 );
-
-// Internal function - used by other endpoints
-const sendNotificationToUserInternal = async (
-    title: string,
-    body: string,
-    customData: Record<string, string>,
-    userId: string
-): Promise<string> => {
-    const fcmToken = await getUserFCMToken(userId);
-
-    const message: admin.messaging.Message = {
-        notification: {
-            title,
-            body,
-        },
-        data: customData,
-        token: fcmToken,
-    };
-
-    logger.info(`Sending notification to user: ${userId}`);
-    const messageId = await admin.messaging().send(message);
-    return messageId;
-};
 
 // HTTP Endpoint wrapper for /notify-user
 export const sendNotificationToUser = functions.https.onRequest(
@@ -453,31 +472,16 @@ export const sendNotification = functions.https.onRequest(
                 return;
             }
 
-            // API Key validation with detailed debugging
+            // API Key validation
             const validApiKey = config.notification.apiKey;
             const authHeader = req.headers.authorization as string;
             const providedApiKey = authHeader?.replace("Bearer ", "");
 
-            // Log detailed validation info
-            logger.info("🔐 API Key Validation Started");
-            logger.info(`   Auth Header Present: ${!!authHeader}`);
-            logger.info(`   Auth Header Length: ${authHeader?.length || 0}`);
-            logger.info(`   Auth Header (masked): ${maskValue(authHeader)}`);
-            logger.info(`   Provided Key Present: ${!!providedApiKey}`);
-            logger.info(`   Provided Key Length: ${providedApiKey?.length || 0}`);
-            logger.info(`   Provided Key (masked): ${maskValue(providedApiKey)}`);
-            logger.info(`   Valid Key Present: ${!!validApiKey}`);
-            logger.info(`   Valid Key Length: ${validApiKey?.length || 0}`);
-            logger.info(`   Valid Key (masked): ${maskValue(validApiKey)}`);
-            logger.info(`   Keys Match: ${providedApiKey === validApiKey}`);
-
             if (!providedApiKey || providedApiKey !== validApiKey) {
                 logger.warn("❌ Unauthorized API request - Key mismatch");
-
-                const debugInfo = getDebugInfo();
                 const executionTime = Date.now() - startTime;
 
-                const response = {
+                res.status(401).json({
                     success: false,
                     error: "Unauthorized",
                     timestamp: getTimestamp(),
@@ -485,28 +489,12 @@ export const sendNotification = functions.https.onRequest(
                         debug: {
                             functionName: "sendNotification",
                             executionTime,
-                            message: "API key validation failed",
-                            authHeaderPresent: !!authHeader,
-                            authHeaderLength: authHeader?.length || 0,
-                            providedKeyLength: providedApiKey?.length || 0,
-                            providedKeyMasked: maskValue(providedApiKey),
-                            validKeyLength: validApiKey?.length || 0,
-                            validKeyMasked: maskValue(validApiKey),
-                            keysMatch: providedApiKey === validApiKey,
-                            ...(VERBOSE_DEBUG && {
-                                config: debugInfo.config,
-                                environment: debugInfo.environment,
-                                runtime: debugInfo.runtime,
-                            }),
+                            message: "API key validation failed"
                         },
                     }),
-                };
-
-                res.status(401).json(response);
+                });
                 return;
             }
-
-            logger.info("✅ API Key validation successful");
 
             // Validate request
             const request = validateNotificationRequest(req.body);
