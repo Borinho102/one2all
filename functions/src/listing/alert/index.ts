@@ -37,6 +37,56 @@ interface UserDocument {
     [key: string]: any;
 }
 
+interface NotificationLog {
+    userId?: string;
+    topic?: string;
+    title: string;
+    body: string;
+    data?: Record<string, any>;
+    createdAt: admin.firestore.FieldValue;
+    read: boolean;
+}
+
+const persistNotification = async (
+    title: string,
+    body: string,
+    data: Record<string, string>,
+    userId?: string,
+    topic?: string
+): Promise<void> => {
+    try {
+        const notificationData: NotificationLog = {
+            title,
+            body,
+            data,
+            createdAt: admin.firestore.FieldValue.serverTimestamp(),
+            read: false, // Default to unread
+        };
+
+        if (userId) {
+            notificationData.userId = userId;
+            // Store in a subcollection: users/{userId}/notifications/{notificationId}
+            // This is best for security rules (request.auth.uid == userId)
+            await admin.firestore()
+                .collection("users")
+                .doc(userId)
+                .collection("notifications")
+                .add(notificationData);
+        }
+        else if (topic) {
+            notificationData.topic = topic;
+            // Store topic messages in a general collection since they don't belong to one specific ID
+            await admin.firestore()
+                .collection("topic_notifications")
+                .add(notificationData);
+        }
+    } catch (error) {
+        logger.error("Failed to persist notification to Firestore", error);
+        // We do not throw here because we don't want to fail the API call
+        // just because the DB save failed, as long as FCM sent successfully.
+    }
+};
+
 // ============ Types ============
 
 type NotificationCallableData = NotificationRequest & { apiKey?: string };
@@ -184,12 +234,15 @@ const getUserFCMToken = async (userId: string): Promise<string> => {
 
 // ============ CORE SENDING FUNCTIONS ============
 
+
 const sendNotificationToTopic = async (
     title: string,
     body: string,
     customData: Record<string, string>,
     topic: string
 ): Promise<string> => {
+
+    // 1. Send to FCM
     const message: admin.messaging.Message = {
         notification: {
             title,
@@ -201,11 +254,14 @@ const sendNotificationToTopic = async (
 
     logger.info(`Sending notification to topic: ${topic}`);
     const messageId = await admin.messaging().send(message);
+
+    // 2. Persist to DB (Fire and forget, or await if strict consistency needed)
+    await persistNotification(title, body, customData, undefined, topic);
+
     return messageId;
 };
 
 // Internal function - used by other endpoints
-// UPDATED: Now handles invalid token errors gracefully
 const sendNotificationToUserInternal = async (
     title: string,
     body: string,
@@ -226,7 +282,12 @@ const sendNotificationToUserInternal = async (
     logger.info(`Sending notification to user: ${userId}`);
 
     try {
-        const messageId = await admin.messaging().send(message);
+        // Run FCM send and DB save in parallel for performance
+        const [messageId] = await Promise.all([
+            admin.messaging().send(message),
+            persistNotification(title, body, customData, userId)
+        ]);
+
         return messageId;
     } catch (error: any) {
         // Handle Invalid Token Error
@@ -235,7 +296,7 @@ const sendNotificationToUserInternal = async (
 
             logger.warn(`❌ Invalid FCM Token for user ${userId}. Removing token from DB.`);
 
-            // Clean up the invalid token to prevent future errors
+            // Clean up the invalid token
             await admin.firestore()
                 .collection("users")
                 .doc(userId)
@@ -243,6 +304,11 @@ const sendNotificationToUserInternal = async (
                     fcm_token: admin.firestore.FieldValue.delete(),
                     updatedAt: admin.firestore.FieldValue.serverTimestamp()
                 });
+
+            // OPTIONAL: Still persist the notification even if the push failed?
+            // Usually, if they uninstalled, we don't save it.
+            // If you WANT to save it anyway (so they see it if they reinstall), uncomment below:
+            // await persistNotification(title, body, customData, userId);
 
             throw new functions.https.HttpsError(
                 "not-found",

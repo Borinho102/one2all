@@ -112,7 +112,6 @@ interface GetPaymentDetailsResponse {
 // ==================== 1. CREATE PAYMENT INTENT ====================
 export const createPaymentIntent = onCall(
     async (request: CallableRequest<CreatePaymentIntentRequest>): Promise<CreatePaymentIntentResponse> => {
-
         if (!request.auth || !request.auth.uid) {
             throw new HttpsError(
                 "unauthenticated",
@@ -161,45 +160,62 @@ export const createPaymentIntent = onCall(
 
             const timestamp = new Date().toISOString();
 
-            const paymentRecord: PaymentDocument = {
-                payment_id: paymentIntent.id,
-                user_id: userId,
-                vendor_id,
-                booking_id: bookingId,
-                amount,
-                currency,
-                status: "PENDING",
-                gateway: "stripe",
-                transaction_id: paymentIntent.id,
-                customer_email: email,
-                created_at: new Date().toISOString(),
-                updated_at: new Date().toISOString(),
-                metadata: {
-                    service_id: booking?.service_id,
-                },
-            };
-
-            // Step 1: Create payment document with clean structure
-            await db
+            // Step 1: Check if payment already exists
+            const existingPaymentDoc = await db
                 .collection("payments")
                 .doc(paymentIntent.id)
-                .create({
-                    amount: amount,
+                .get();
+
+            const paymentData = {
+                amount: amount,
+                gateway: "stripe",
+                success: "PENDING",
+                timestamp: timestamp,
+                transaction_id: paymentIntent.id,
+                type: "payment",
+                data: {
                     gateway: "stripe",
                     success: "PENDING",
                     timestamp: timestamp,
                     transaction_id: paymentIntent.id,
                     type: "payment",
-                    data: paymentRecord,
-                    created_at: timestamp,
-                });
+                    booking_id: bookingId,
+                    user_id: userId,
+                    vendor_id: vendor_id,
+                    email: email,
+                    service_id: booking?.service_id,
+                },
+            };
 
-            // Step 2: Update booking (not override)
+            // Step 2: Update or Create payment
+            if (existingPaymentDoc.exists) {
+                console.log(`Payment intent already exists: ${paymentIntent.id}, updating...`);
+
+                await db
+                    .collection("payments")
+                    .doc(paymentIntent.id)
+                    .update({
+                        ...paymentData,
+                        updated_at: timestamp,
+                    });
+            } else {
+                console.log(`Creating new payment intent: ${paymentIntent.id}`);
+
+                await db
+                    .collection("payments")
+                    .doc(paymentIntent.id)
+                    .create({
+                        ...paymentData,
+                        created_at: timestamp,
+                    });
+            }
+
+            // Step 3: Update booking (not override)
             await db
                 .collection("booking")
                 .doc(bookingId)
                 .update({
-                    payment_id: paymentIntent.id,  // ✅ Fixed typo
+                    payment_id: paymentIntent.id,
                     status: "PAYMENT",
                     updated_at: timestamp,
                 });
@@ -218,8 +234,6 @@ export const createPaymentIntent = onCall(
     }
 );
 
-// ==================== 2. STRIPE WEBHOOK HANDLER ====================
-// Note: onRequest is imported from v2/https or standard firebase-functions
 // ==================== 2. STRIPE WEBHOOK HANDLER ====================
 export const stripeWebhook = onRequest(
     async (req: Request, res: Response) => {
@@ -276,7 +290,6 @@ export const stripeWebhook = onRequest(
 );
 
 // ==================== 3. PAYMENT SUCCESS HANDLER ====================
-// @ts-ignore
 async function handlePaymentSucceeded(paymentIntent: Stripe.PaymentIntent) {
     const paymentId = paymentIntent.id;
     const metadata = paymentIntent.metadata || {};
@@ -306,6 +319,7 @@ async function handlePaymentSucceeded(paymentIntent: Stripe.PaymentIntent) {
     // Step 2: Update booking with new field names
     await db.collection("booking").doc(bookingId).update({
         status: "PAID",
+        is_paid: true,
         payment_id: paymentId,
         updated_at: new Date().toISOString(),
     });
@@ -349,6 +363,7 @@ async function handlePaymentFailed(paymentIntent: Stripe.PaymentIntent) {
     await db.collection("bookings").doc(bookingId).update({
         payment_id: paymentId,
         status: "PAYMENT",
+        is_paid: false,
         updated_at: new Date().toISOString(),
     });
 
