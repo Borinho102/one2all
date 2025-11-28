@@ -661,7 +661,8 @@ export async function getBookingDetailById(req: Request, res: Response) {
  * @query/body id - (required) User ID (client_id or vendor_id)
  * @query/body expand - (optional) 'true' to expand services, 'false' to enrich with user data
  * @query/body status - (optional) Filter by booking status
- * @query/body cursor - (optional) Pagination cursor
+ * @query/body cursor - (optional) Pagination cursor (Prioritized over page)
+ * @query/body page - (optional) Page number (Default 1). Used if cursor is not provided.
  * @query/body limit - (optional) Results per page (1-100, default 10)
  * @query/body sortBy - (optional) Field to sort by (created_at, book_datetime, status)
  * @query/body sortOrder - (optional) 'asc' or 'desc'
@@ -674,8 +675,12 @@ export async function getBookingsByMode(req: Request, res: Response): Promise<an
         const id = (req.query.id || req.body.id) as string;
         const expand = (req.query.expand || req.body.expand) === 'true';
         const status = (req.query.status || req.body.status) as string | undefined;
+
+        // Pagination params
         const cursor = (req.query.cursor || req.body.cursor) as string | undefined;
+        const page = Math.max(parseInt((req.query.page || req.body.page || '1') as string), 1);
         const limit = Math.min(parseInt((req.query.limit || req.body.limit || '10') as string), 100);
+
         let sortBy = (req.query.sortBy || req.body.sortBy) as string;
         const sortOrder = (req.query.sortOrder || req.body.sortOrder || 'desc') as 'asc' | 'desc';
         const groupBy = (req.query.groupBy || req.body.groupBy) as string | undefined;
@@ -727,6 +732,7 @@ export async function getBookingsByMode(req: Request, res: Response): Promise<an
         console.log(`\n🔍 Fetching bookings:`);
         console.log(`   Mode: ${mode}`);
         console.log(`   ID: ${id}`);
+        console.log(`   Page: ${page}, Limit: ${limit}`);
         console.log(`   Populate configs: ${populateConfigs?.length || 0}`);
 
         const fieldName = mode === 'client' ? 'client_id' : 'vendor_id';
@@ -741,6 +747,7 @@ export async function getBookingsByMode(req: Request, res: Response): Promise<an
 
         query = query.orderBy(finalSortBy, sortOrder);
 
+        // ✅ Pagination Logic (Cursor vs Page)
         if (cursor) {
             try {
                 const cursorDoc = await db
@@ -755,6 +762,11 @@ export async function getBookingsByMode(req: Request, res: Response): Promise<an
             } catch (error) {
                 console.warn('⚠️ Invalid cursor:', error);
             }
+        } else if (page > 1) {
+            // Only apply offset if no cursor is present and page > 1
+            const offset = (page - 1) * limit;
+            console.log(`   📄 Applying offset: ${offset}`);
+            query = query.offset(offset);
         }
 
         const snapshot = await query.limit(limit + 1).get();
@@ -768,6 +780,7 @@ export async function getBookingsByMode(req: Request, res: Response): Promise<an
                 id,
                 expanded: expand,
                 hasMore: false,
+                page, // Return page info
                 nextCursor: undefined,
                 totalCount: 0,
                 groupBy: groupBy || undefined
@@ -825,6 +838,7 @@ export async function getBookingsByMode(req: Request, res: Response): Promise<an
                 id,
                 expanded: true,
                 hasMore,
+                page, // Return page info
                 nextCursor,
                 totalCount: expandedCarts.length,
                 groupBy
@@ -866,6 +880,8 @@ export async function getBookingsByMode(req: Request, res: Response): Promise<an
             id,
             expanded: false,
             hasMore,
+            limit,
+            page, // Return page info
             nextCursor,
             totalCount: enrichedBookings.length,
             groupBy

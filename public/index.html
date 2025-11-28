@@ -100,7 +100,7 @@
         }
 
         // Construct the dynamic URL
-        const iframeUrl = `http://localhost:3000/watch-party/frame/${roomId}?session=${encodeURIComponent(sessionToken)}`;
+        const iframeUrl = `https://hub.one2all.tv/watch-party/frame/${roomId}?session=${encodeURIComponent(sessionToken)}`;
 
         iframe.src = iframeUrl;
         container.style.display = "block";

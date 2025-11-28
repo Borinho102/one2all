@@ -3,6 +3,7 @@ import Stripe from "stripe";
 import { Request, Response } from "express";
 import { onCall, CallableRequest, HttpsError, onRequest } from "firebase-functions/v2/https"; // Added onRequest to v2 imports
 import config from "../../config";
+import { defineSecret } from "firebase-functions/params";
 
 // Initialize Firebase Admin
 if (!admin.apps.length) {
@@ -16,9 +17,11 @@ db.settings({ ignoreUndefinedProperties: true });
 // Get Stripe API key from environment
 const stripeApiKey = config.stripe.apiKey || "";
 const stripeSecretKey = config.stripe.secretKey || "";
-const stripeWebhookSecret = config.stripe.webhookKey || "";
 
-console.log("STRIPE", stripeApiKey, stripeSecretKey, stripeWebhookSecret);
+const stripeWebhookSecret2 = config.stripe.webhookKey || "";
+const stripeWebhookSecret = defineSecret("STRIPE_WEBHOOK_SECRET");
+
+console.log("STRIPE", stripeApiKey, stripeSecretKey, stripeWebhookSecret2, stripeWebhookSecret);
 
 const stripe = new Stripe(stripeSecretKey, {
     apiVersion: "2024-06-20" as any,
@@ -236,12 +239,39 @@ export const createPaymentIntent = onCall(
 
 // ==================== 2. STRIPE WEBHOOK HANDLER ====================
 export const stripeWebhook = onRequest(
+    { secrets: [stripeWebhookSecret] },
     async (req: Request, res: Response) => {
-        const sig = req.headers["stripe-signature"] as string;
-
-        // FIX: Access the raw buffer directly from Firebase/Express
-        // Do NOT use JSON.stringify(req.body)
+        const sig = req.headers["stripe-signature"];
         const rawBody = (req as any).rawBody;
+
+        // Get the actual string value of the secret
+        const secretValue = stripeWebhookSecret2;
+        // let secretValue = stripeWebhookSecret.value();
+
+        // --- DEBUGGING BLOCK START ---
+        console.log("--- STRIPE WEBHOOK DEBUG START ---");
+
+        // 1. Check if the secret is loaded
+        if (!secretValue) {
+            console.error("CRITICAL: Stripe Webhook Secret is missing.");
+        } else {
+            // Log first 5 chars to verify it's the right key (whsec_...)
+            console.log(`Secret loaded: ${secretValue.substring(0, 5)}...`);
+        }
+
+        // 2. Check the Signature
+        console.log(`Signature Header: ${sig ? "Present" : "Missing"}`);
+
+        // 3. Check the Body format
+        console.log(`RawBody Type: ${typeof rawBody}`);
+        console.log(`RawBody is Buffer?: ${Buffer.isBuffer(rawBody)}`);
+
+        if (rawBody) {
+            console.log(`RawBody Length: ${rawBody.length}`);
+        } else {
+            console.error("CRITICAL: rawBody is undefined. Firebase did not preserve the body.");
+        }
+        // --- DEBUGGING BLOCK END ---
 
         if (!rawBody) {
             console.error("Missing rawBody in request");
@@ -249,13 +279,26 @@ export const stripeWebhook = onRequest(
             return;
         }
 
+        if (!sig || !secretValue) {
+            console.error("Missing signature or secret");
+            res.status(400).send("Configuration Error");
+            return;
+        }
+
         let event;
 
         try {
-            // Use the rawBody buffer directly
-            event = stripe.webhooks.constructEvent(rawBody, sig, stripeWebhookSecret);
+            // Force the rawBody to be a buffer if it isn't already
+            const payload = Buffer.isBuffer(rawBody) ? rawBody : Buffer.from(rawBody);
+
+            event = stripe.webhooks.constructEvent(
+                payload,
+                sig,
+                secretValue // Use the value string here
+            );
         } catch (err: any) {
-            console.error(`Webhook Signature Error: ${err.message}`);
+            console.error(`Webhook Signature Verification Failed.`);
+            console.error(`Error Message: ${err.message}`);
             res.status(400).send(`Webhook Error: ${err.message}`);
             return;
         }
@@ -265,16 +308,18 @@ export const stripeWebhook = onRequest(
         try {
             switch (event.type) {
                 case "payment_intent.succeeded":
-                    // await handlePaymentFailed(event.data.object as Stripe.PaymentIntent);
                     await handlePaymentSucceeded(event.data.object as Stripe.PaymentIntent);
+                    console.log("Processing payment_intent.succeeded");
                     break;
 
                 case "payment_intent.payment_failed":
                     await handlePaymentFailed(event.data.object as Stripe.PaymentIntent);
+                    console.log("Processing payment_intent.payment_failed");
                     break;
 
                 case "charge.refunded":
                     await handleRefund(event.data.object as Stripe.Charge);
+                    console.log("Processing charge.refunded");
                     break;
 
                 default:

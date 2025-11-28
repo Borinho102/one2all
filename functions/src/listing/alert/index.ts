@@ -43,7 +43,7 @@ interface NotificationLog {
     title: string;
     body: string;
     data?: Record<string, any>;
-    createdAt: admin.firestore.FieldValue;
+    createdAt: string;
     read: boolean;
 }
 
@@ -59,25 +59,19 @@ const persistNotification = async (
             title,
             body,
             data,
-            createdAt: admin.firestore.FieldValue.serverTimestamp(),
+            createdAt: new Date().toISOString(),
             read: false, // Default to unread
         };
 
         if (userId) {
             notificationData.userId = userId;
-            // Store in a subcollection: users/{userId}/notifications/{notificationId}
-            // This is best for security rules (request.auth.uid == userId)
-            await admin.firestore()
-                .collection("users")
-                .doc(userId)
-                .collection("notifications")
+            await admin.firestore().collection("notifications")
                 .add(notificationData);
         }
         else if (topic) {
             notificationData.topic = topic;
             // Store topic messages in a general collection since they don't belong to one specific ID
-            await admin.firestore()
-                .collection("topic_notifications")
+            await admin.firestore().collection("alerts")
                 .add(notificationData);
         }
     } catch (error) {
