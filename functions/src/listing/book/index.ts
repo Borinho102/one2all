@@ -653,6 +653,10 @@ export async function getBookingDetailById(req: Request, res: Response) {
     }
 }
 
+// ============================================================
+// UPDATED ENDPOINT - With type parameter
+// ============================================================
+
 /**
  * 🔓 PUBLIC ENDPOINT - No authorization required
  * Fetch bookings by mode (client or vendor) with pagination, filtering, and optional population
@@ -660,6 +664,11 @@ export async function getBookingDetailById(req: Request, res: Response) {
  * @query/body mode - (required) 'client' or 'vendor'
  * @query/body id - (required) User ID (client_id or vendor_id)
  * @query/body expand - (optional) 'true' to expand services, 'false' to enrich with user data
+ * @query/body type - (optional) Filter by booking type: 'all' (default), 'request', 'upcoming', 'past'
+ *   - all: All bookings (no filter)
+ *   - request: is_admin_decision=false AND book_datetime >= now
+ *   - upcoming: is_admin_decision=true AND book_datetime >= now
+ *   - past: book_datetime < now
  * @query/body status - (optional) Filter by booking status
  * @query/body cursor - (optional) Pagination cursor (Prioritized over page)
  * @query/body page - (optional) Page number (Default 1). Used if cursor is not provided.
@@ -674,6 +683,7 @@ export async function getBookingsByMode(req: Request, res: Response): Promise<an
         const mode = (req.query.mode || req.body.mode) as string;
         const id = (req.query.id || req.body.id) as string;
         const expand = (req.query.expand || req.body.expand) === 'true';
+        const type = (req.query.type || req.body.type || 'all') as string; // ✅ NEW: type filter
         const status = (req.query.status || req.body.status) as string | undefined;
 
         // Pagination params
@@ -726,21 +736,54 @@ export async function getBookingsByMode(req: Request, res: Response): Promise<an
             });
         }
 
+        // ✅ Validate type parameter
+        const validTypes = ['all', 'request', 'upcoming', 'past'];
+        if (!validTypes.includes(type)) {
+            return res.status(400).json({
+                success: false,
+                error: `Invalid type. Must be one of: ${validTypes.join(', ')}`
+            });
+        }
+
         const validSortFields = ['created_at', 'book_datetime', 'status'];
         const finalSortBy = validSortFields.includes(sortBy) ? sortBy : 'created_at';
 
         console.log(`\n🔍 Fetching bookings:`);
         console.log(`   Mode: ${mode}`);
         console.log(`   ID: ${id}`);
+        console.log(`   Type: ${type}`); // ✅ Log type filter
         console.log(`   Page: ${page}, Limit: ${limit}`);
         console.log(`   Populate configs: ${populateConfigs?.length || 0}`);
 
         const fieldName = mode === 'client' ? 'client_id' : 'vendor_id';
 
+        const dateNow = new Date();
+        const now = dateNow.toISOString();
+
         let query = db
             .collection(BOOKING_COLLECTION)
             .where(fieldName, '==', id);
 
+        // ✅ Apply type filter (NEW LOGIC)
+        if (type === 'request') {
+            // request => is_admin_decision=false AND book_datetime >= now
+            query = query.where('is_admin_decision', '==', false);
+            query = query.where('book_datetime', '>=', now);
+            console.log(`   🔹 Filter: request (is_admin_decision=false, book_datetime>=now)`);
+        } else if (type === 'upcoming') {
+            // upcoming => is_admin_decision=true AND book_datetime >= now
+            query = query.where('is_admin_decision', '==', true);
+            query = query.where('book_datetime', '>=', now);
+            console.log(`   🔹 Filter: upcoming (is_admin_decision=true, book_datetime>=now)`);
+        } else if (type === 'past') {
+            // past => book_datetime < now
+            query = query.where('book_datetime', '<', now);
+            console.log(`   🔹 Filter: past (book_datetime<now)`);
+        } else {
+            console.log(`   🔹 Filter: all (no type filter)`);
+        }
+
+        // ✅ Apply additional status filter if provided
         if (status) {
             query = query.where('status', '==', status);
         }
@@ -780,10 +823,11 @@ export async function getBookingsByMode(req: Request, res: Response): Promise<an
                 id,
                 expanded: expand,
                 hasMore: false,
-                page, // Return page info
+                page,
                 nextCursor: undefined,
                 totalCount: 0,
-                groupBy: groupBy || undefined
+                groupBy: groupBy || undefined,
+                type: type // ✅ Include type in response
             };
 
             // ✅ Apply response-level populate
@@ -838,10 +882,11 @@ export async function getBookingsByMode(req: Request, res: Response): Promise<an
                 id,
                 expanded: true,
                 hasMore,
-                page, // Return page info
+                page,
                 nextCursor,
                 totalCount: expandedCarts.length,
-                groupBy
+                groupBy,
+                type: type // ✅ Include type in response
             };
 
             if (groupBy === 'date') {
@@ -881,10 +926,11 @@ export async function getBookingsByMode(req: Request, res: Response): Promise<an
             expanded: false,
             hasMore,
             limit,
-            page, // Return page info
+            page,
             nextCursor,
             totalCount: enrichedBookings.length,
-            groupBy
+            groupBy,
+            type: type // ✅ Include type in response
         };
 
         if (groupBy === 'date') {
@@ -911,7 +957,6 @@ export async function getBookingsByMode(req: Request, res: Response): Promise<an
         });
     }
 }
-
 // ============================================================
 // HELPER FUNCTIONS
 // ============================================================

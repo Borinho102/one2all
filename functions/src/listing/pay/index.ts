@@ -67,6 +67,7 @@ interface RequestRefundRequest {
 interface RequestRefundResponse {
     success: boolean;
     refundId: string;
+    data: any;
     amount: number;
 }
 
@@ -173,10 +174,13 @@ export const createPaymentIntent = onCall(
                 amount: amount,
                 gateway: "stripe",
                 success: "PENDING",
+                status: "PENDING",
                 timestamp: timestamp,
+                intent: paymentIntent.id,
                 transaction_id: paymentIntent.id,
                 type: "payment",
                 data: {
+                    ...paymentIntent,
                     gateway: "stripe",
                     success: "PENDING",
                     timestamp: timestamp,
@@ -247,6 +251,9 @@ export const stripeWebhook = onRequest(
         // Get the actual string value of the secret
         const secretValue = stripeWebhookSecret2;
         // let secretValue = stripeWebhookSecret.value();
+
+        console.log(`[••••••••••••••••••••••••••••••••••••••••••${stripeWebhookSecret.value()}•••••••••••••••••••••••••••••••••••••••••••••••••••••]`)
+        console.log(`[••••••••••••••••••••••••••••••••••••••••••    ${stripeWebhookSecret2}   •••••••••••••••••••••••••••••••••••••••••••••••••••••]`)
 
         // --- DEBUGGING BLOCK START ---
         console.log("--- STRIPE WEBHOOK DEBUG START ---");
@@ -322,6 +329,11 @@ export const stripeWebhook = onRequest(
                     console.log("Processing charge.refunded");
                     break;
 
+                case "refund.updated":
+                    await finishRefund(event.data.object as Stripe.Refund);
+                    console.log("Processing charge.refunded");
+                    break;
+
                 default:
                     console.log(`Unhandled event type: ${event.type}`);
             }
@@ -349,10 +361,12 @@ async function handlePaymentSucceeded(paymentIntent: Stripe.PaymentIntent) {
         amount: paymentIntent.amount / 100,
         gateway: "stripe",
         success: "SUCCESS",
+        status: "PAID",
         timestamp: new Date().toISOString(),
         transaction_id: chargeId,
         type: "payment",
         data: {
+            ...paymentIntent,
            user_id: userId,
            vendor_id: vendor_id,
            booking_id: bookingId,
@@ -369,28 +383,6 @@ async function handlePaymentSucceeded(paymentIntent: Stripe.PaymentIntent) {
         updated_at: new Date().toISOString(),
     });
 
-    // Step 3: Record vendor payment (if vendors subcollection exists)
-    // await db
-    //     .collection("vendors")
-    //     .doc(vendor_id)
-    //     .collection("payments")
-    //     .doc(paymentId)
-    //     .set({
-    //         payment_id: paymentId,
-    //         booking_id: bookingId,
-    //         client_id: userId,
-    //         amount: paymentIntent.amount / 100,
-    //         currency: paymentIntent.currency,
-    //         data: {
-    //             gateway: "stripe",
-    //             success: "SUCCESS",
-    //             timestamp: new Date().toISOString(),
-    //             transaction_id: chargeId,
-    //             type: "payment",
-    //         },
-    //         created_at: new Date().toISOString(),
-    //     });
-
     console.log(`Payment succeeded: ${paymentId} for booking: ${bookingId}`);
 }
 
@@ -402,6 +394,7 @@ async function handlePaymentFailed(paymentIntent: Stripe.PaymentIntent) {
 
     await db.collection("payments").doc(paymentId).update({
         status: "FAILED",
+        success: "FALSE",
         updated_at: new Date().toISOString(),
     });
 
@@ -423,6 +416,7 @@ async function handleRefund(charge: Stripe.Charge) {
     const paymentSnapshot = await db
         .collection("payments")
         .where("transaction_id", "==", chargeId)
+        .where("type", "==", "refund")
         .limit(1)
         .get();
 
@@ -436,7 +430,36 @@ async function handleRefund(charge: Stripe.Charge) {
 
     await paymentDoc.ref.update({
         status: "REFUND",
-        data: charge,
+        success: charge.status == 'succeeded' ? "SUCCESS" : "ERROR",
+        amount: charge.amount / 100,
+        charge: charge,
+        updated_at: new Date().toISOString(),
+    });
+
+    await db.collection("bookings").doc(payment.booking_id).update({
+        refund_id: chargeId,
+        updated_at: new Date().toISOString(),
+    });
+
+    console.log(`Refund processed: ${chargeId}, Amount: ${refundAmount}`);
+}
+
+async function finishRefund(paymentIntent: Stripe.Refund) {
+    const chargeId = paymentIntent.id;
+    const refundAmount = paymentIntent.amount;
+
+    const paymentDoc = await db
+        .collection("payments")
+        .doc(chargeId)
+        .get();
+
+    const payment = paymentDoc.data() as PaymentDocument;
+
+    await paymentDoc.ref.update({
+        status: "REFUND",
+        success: "SUCCESS",
+        amount: paymentIntent.amount/100,
+        data: paymentIntent,
         updated_at: new Date().toISOString(),
     });
 
@@ -481,12 +504,23 @@ export const requestRefund = onCall(
                 );
             }
 
-            // Step 2: Check if booking status is "REFUND"
-            if (bookingData?.status !== "REFUND") {
-                throw new HttpsError(
-                    "failed-precondition",
-                    `Booking status must be REFUND to request refund. Current status: ${bookingData?.status}`
-                );
+            console.log("booking refund ID data", bookingData?.refund_id);
+            const refundId = bookingData?.refund_id;
+            if (refundId && refundId.length > 0) {
+                const refundDoc = await db
+                    .collection("payments")
+                    .doc(refundId)
+                    .get();
+
+                const refundData = refundDoc.data();
+
+                // Verify payment is successful
+                if (refundData?.success == "SUCCESS") {
+                    throw new HttpsError(
+                        "failed-precondition",
+                        `Refund has already been processed`
+                    );
+                }
             }
 
             // Step 3: Get the payment ID from booking
@@ -514,7 +548,7 @@ export const requestRefund = onCall(
             const paymentData = paymentDoc.data();
 
             // Verify payment is successful
-            if (paymentData?.status !== "SUCCESS") {
+            if (paymentData?.success !== "SUCCESS") {
                 throw new HttpsError(
                     "failed-precondition",
                     `Payment must be successful to refund. Current status: ${paymentData?.data?.success}`
@@ -531,33 +565,43 @@ export const requestRefund = onCall(
                 },
             });
 
-            // Step 6: Update payment document to mark as refunded
-            await paymentDoc.ref.update({
-                amount: 0, // Refunded amount is 0
-                data: {
-                    ...paymentData.data,
-                    success: "SUCCESS",
-                    type: "refund",
-                    refund_id: refund.id,
-                    refund_timestamp: new Date().toISOString(),
-                    refund_reason: reason,
-                },
-                success: "SUCCESS",
-                type: "refund",
-                updated_at: new Date().toISOString(),
-            });
+            const timestamp = new Date().toISOString();
 
-            // Step 7: Update booking refund_id and status
+            await db
+                .collection("payments")
+                .doc(refund.id)
+                .create({
+                    amount: 0, // Refunded amount is 0
+                    data: {
+                        ...refund,
+                        success: "PENDING",
+                        type: refund.object,
+                        refund_id: refund.id,
+                        currency: refund.currency,
+                        refund_timestamp: new Date().toISOString(),
+                        refund_reason: reason,
+                        transaction: refund.balance_transaction,
+                    },
+                    intent: refund.payment_intent,
+                    transaction_id: refund.charge,
+                    success: "PENDING",
+                    type: refund.object,
+                    timestamp: timestamp,
+                    updated_at: new Date().toISOString(),
+                });
+
+            // // Step 7: Update booking refund_id and status
             await db.collection("booking").doc(bookingId).update({
                 refund_id: refund.id,
-                status: "REFUNDED",
+                status: "REFUND",
                 updated_at: new Date().toISOString(),
             });
 
             return {
                 success: true,
                 refundId: refund.id,
-                amount: paymentData.amount,
+                data: {},
+                amount: refund.amount / 100,
             };
         } catch (error: any) {
             console.error("Refund request error:", error);
