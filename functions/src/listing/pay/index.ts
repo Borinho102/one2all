@@ -329,6 +329,11 @@ export const stripeWebhook = onRequest(
                     console.log("Processing charge.refunded");
                     break;
 
+                case "charge.updated":
+                    await handleCharge(event.data.object as Stripe.Charge);
+                    console.log("Processing charge.updated");
+                    break;
+
                 case "refund.updated":
                     await finishRefund(event.data.object as Stripe.Refund);
                     console.log("Processing charge.refunded");
@@ -365,6 +370,7 @@ async function handlePaymentSucceeded(paymentIntent: Stripe.PaymentIntent) {
         timestamp: new Date().toISOString(),
         transaction_id: chargeId,
         type: "payment",
+        charge: paymentIntent.latest_charge,
         data: {
             ...paymentIntent,
            user_id: userId,
@@ -409,6 +415,26 @@ async function handlePaymentFailed(paymentIntent: Stripe.PaymentIntent) {
 }
 
 // ==================== 5. REFUND HANDLER ====================
+async function handleCharge(charge: Stripe.Charge) {
+    const chargeId = charge.id;
+    const paymentSnapshot = await db
+        .collection("payments")
+        .where("charge", "==", chargeId)
+        .limit(1)
+        .get();
+
+    if (paymentSnapshot.empty) {
+        console.log(`Payment not found for charge: ${chargeId}`);
+        return;
+    }
+    const paymentDoc = paymentSnapshot.docs[0];
+    await paymentDoc.ref.update({
+        url: charge.receipt_url,
+        updated_at: new Date().toISOString(),
+    });
+
+}
+
 async function handleRefund(charge: Stripe.Charge) {
     const chargeId = charge.id;
     const refundAmount = charge.amount_refunded;
@@ -433,6 +459,7 @@ async function handleRefund(charge: Stripe.Charge) {
         success: charge.status == 'succeeded' ? "SUCCESS" : "ERROR",
         amount: charge.amount / 100,
         charge: charge,
+        url: charge.receipt_url,
         updated_at: new Date().toISOString(),
     });
 
@@ -465,6 +492,7 @@ async function finishRefund(paymentIntent: Stripe.Refund) {
 
     await db.collection("bookings").doc(payment.booking_id).update({
         refund_id: chargeId,
+        is_paid: false,
         updated_at: new Date().toISOString(),
     });
 
@@ -583,6 +611,7 @@ export const requestRefund = onCall(
                         transaction: refund.balance_transaction,
                     },
                     intent: refund.payment_intent,
+                    charge: refund.charge,
                     transaction_id: refund.charge,
                     success: "PENDING",
                     type: refund.object,
