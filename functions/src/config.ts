@@ -18,6 +18,7 @@ interface StripeConfig {
     apiKey: string;
     secretKey: string;
     webhookKey: string;
+    fee: number;
 }
 
 export interface AppConfig {
@@ -43,6 +44,7 @@ const config: AppConfig = {
         apiKey: process.env.STRIPE_API_KEY || '',
         secretKey: process.env.STRIPE_SECRET_KEY || '',
         webhookKey: process.env.STRIPE_WEBHOOK_KEY || '',
+        fee: parseFloat(process.env.STRIPE_FEE_RATE || "5"),
     },
     environment: (process.env.NODE_ENV as 'development' | 'production' | 'test') || 'development',
     isDevelopment: process.env.NODE_ENV === 'development',

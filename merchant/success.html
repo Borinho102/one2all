@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stripe Merchant Onboarding</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 500px;
+            width: 100%;
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15);
+            overflow: hidden;
+            animation: slideUp 0.5s ease-out;
+        }
+
+        @keyframes slideUp {
+            from {
+                opacity: 0;
+                transform: translateY(30px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .icon-wrapper {
+            height: 120px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 60px;
+            animation: scaleIn 0.6s ease-out 0.2s both;
+        }
+
+        @keyframes scaleIn {
+            from {
+                transform: scale(0);
+            }
+            to {
+                transform: scale(1);
+            }
+        }
+
+        /* Success State */
+        .success {
+            background: linear-gradient(135deg, #f5f7fa 0%, #ffffff 100%);
+        }
+
+        .success .icon-wrapper {
+            color: #10b981;
+        }
+
+        .success .checkmark {
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            background: #d1fae5;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 48px;
+        }
+
+        /* Error State */
+        .error {
+            background: linear-gradient(135deg, #faf5f0 0%, #ffffff 100%);
+        }
+
+        .error .icon-wrapper {
+            color: #ef4444;
+        }
+
+        .error .error-icon {
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            background: #fee2e2;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 48px;
+        }
+
+        .content {
+            padding: 40px 30px;
+            text-align: center;
+        }
+
+        h1 {
+            font-size: 28px;
+            font-weight: 700;
+            margin-bottom: 12px;
+            color: #1f2937;
+        }
+
+        .subtitle {
+            font-size: 16px;
+            color: #6b7280;
+            margin-bottom: 30px;
+            line-height: 1.6;
+        }
+
+        .detail-box {
+            background: #f9fafb;
+            border: 1px solid #e5e7eb;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 30px;
+            text-align: left;
+        }
+
+        .detail-label {
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: #9ca3af;
+            margin-bottom: 8px;
+            font-weight: 600;
+        }
+
+        .detail-value {
+            font-size: 16px;
+            color: #1f2937;
+            word-break: break-all;
+            font-family: 'Courier New', monospace;
+        }
+
+        .error-details {
+            background: #fef2f2;
+            border: 1px solid #fecaca;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 30px;
+            text-align: left;
+        }
+
+        .error-message {
+            font-size: 14px;
+            color: #991b1b;
+            line-height: 1.6;
+        }
+
+        .button-group {
+            display: flex;
+            gap: 12px;
+            flex-direction: column;
+        }
+
+        .btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            display: inline-block;
+            text-align: center;
+            width: 100%;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.6);
+        }
+
+        .btn-primary:active {
+            transform: translateY(0);
+        }
+
+        .btn-secondary {
+            background: white;
+            color: #667eea;
+            border: 2px solid #667eea;
+        }
+
+        .btn-secondary:hover {
+            background: #f3f4f6;
+            transform: translateY(-2px);
+        }
+
+        .btn-secondary:active {
+            transform: translateY(0);
+        }
+
+        .btn-success {
+            background: #10b981;
+            color: white;
+            box-shadow: 0 4px 15px rgba(16, 185, 129, 0.4);
+        }
+
+        .btn-success:hover {
+            background: #059669;
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(16, 185, 129, 0.6);
+        }
+
+        .btn-danger {
+            background: #ef4444;
+            color: white;
+            box-shadow: 0 4px 15px rgba(239, 68, 68, 0.4);
+        }
+
+        .btn-danger:hover {
+            background: #dc2626;
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(239, 68, 68, 0.6);
+        }
+
+        .footer-text {
+            margin-top: 20px;
+            font-size: 13px;
+            color: #9ca3af;
+        }
+
+        .footer-text a {
+            color: #667eea;
+            text-decoration: none;
+        }
+
+        .footer-text a:hover {
+            text-decoration: underline;
+        }
+
+        /* Responsive */
+        @media (max-width: 480px) {
+            .content {
+                padding: 30px 20px;
+            }
+
+            h1 {
+                font-size: 24px;
+            }
+
+            .button-group {
+                gap: 10px;
+            }
+
+            .btn {
+                padding: 10px 20px;
+                font-size: 14px;
+            }
+        }
+
+        /* Hide states */
+        .state {
+            display: none;
+        }
+
+        .state.active {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <!-- SUCCESS STATE -->
+    <div class="state active success" id="successState">
+        <div class="icon-wrapper">
+            <div class="checkmark">✓</div>
+        </div>
+
+        <div class="content">
+            <h1>Account Setup Complete</h1>
+            <p class="subtitle">
+                Your merchant account has been successfully created and verified. You're ready to start accepting payments.
+            </p>
+
+<!--            <div class="detail-box">-->
+<!--                <div class="detail-label">Account ID</div>-->
+<!--                <div class="detail-value">acct_1234567890abcdef</div>-->
+<!--            </div>-->
+
+<!--            <div class="detail-box">-->
+<!--                <div class="detail-label">Verification Status</div>-->
+<!--                <div class="detail-value">✓ Verified</div>-->
+<!--            </div>-->
+
+<!--            <div class="button-group">-->
+<!--                <button class="btn btn-success">Go to Dashboard</button>-->
+<!--                <button class="btn btn-secondary" onclick="toggleState()">View Error State</button>-->
+<!--            </div>-->
+
+            <div class="footer-text">
+                Questions? <a href="mailto:support@monlook.online">Contact Support</a>
+            </div>
+        </div>
+    </div>
+
+    <!-- ERROR STATE -->
+    <div class="state error" id="errorState">
+        <div class="icon-wrapper">
+            <div class="error-icon">✕</div>
+        </div>
+
+        <div class="content">
+            <h1>Setup Failed</h1>
+            <p class="subtitle">
+                We encountered an issue while setting up your merchant account. Please review the error below and try again.
+            </p>
+
+            <div class="error-details">
+                <div class="detail-label">Error Code</div>
+                <div class="error-message">
+                    <strong>account_incomplete</strong><br>
+                    Your account information is incomplete. Please verify all required fields have been filled out correctly, including business details, banking information, and beneficial owners.
+                </div>
+            </div>
+
+            <div class="detail-box">
+                <div class="detail-label">Session ID</div>
+                <div class="detail-value">cos_1a2b3c4d5e6f7g8h</div>
+            </div>
+
+            <div class="button-group">
+                <button class="btn btn-danger">Complete Setup</button>
+                <button class="btn btn-secondary" onclick="toggleState()">View Success State</button>
+            </div>
+
+            <div class="footer-text">
+                Need help? <a href="mailto:support@monlook.online">Visit Help Center</a> or <a href="#contact">Contact Support</a>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    function toggleState() {
+        const successState = document.getElementById('successState');
+        const errorState = document.getElementById('errorState');
+
+        successState.classList.toggle('active');
+        errorState.classList.toggle('active');
+    }
+
+    // Optional: Auto-hide based on URL parameter or data
+    // Example: ?status=success or ?status=error
+    const params = new URLSearchParams(window.location.search);
+    const status = params.get('status');
+
+    if (status === 'error') {
+        document.getElementById('successState').classList.remove('active');
+        document.getElementById('errorState').classList.add('active');
+    }
+</script>
+</body>
+</html>

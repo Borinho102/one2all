@@ -5,6 +5,8 @@ import { onCall, CallableRequest, HttpsError, onRequest } from "firebase-functio
 import config from "../../config";
 import { defineSecret } from "firebase-functions/params";
 
+// import { connectFirestoreEmulator } from "firebase/firestore";
+
 // Initialize Firebase Admin
 if (!admin.apps.length) {
     admin.initializeApp();
@@ -13,6 +15,10 @@ if (!admin.apps.length) {
 // FIX: Enable ignoreUndefinedProperties to prevent crashes if other optional fields are undefined
 const db = admin.firestore();
 db.settings({ ignoreUndefinedProperties: true });
+
+// if (location.hostname === "localhost") {
+//     connectFirestoreEmulator(db, "localhost", 8080);
+// }
 
 // Get Stripe API key from environment
 const stripeApiKey = config.stripe.apiKey || "";
@@ -52,6 +58,7 @@ interface CreatePaymentIntentRequest {
     amount: number;
     currency?: string;
     email: string;
+    name?: string;
 }
 
 interface CreatePaymentIntentResponse {
@@ -62,6 +69,8 @@ interface CreatePaymentIntentResponse {
 interface RequestRefundRequest {
     bookingId: string;
     reason: string;
+    email?: string;
+    name?: string;
 }
 
 interface RequestRefundResponse {
@@ -113,6 +122,58 @@ interface GetPaymentDetailsResponse {
     [key: string]: any;
 }
 
+async function getOrCreateCustomer(
+    db: FirebaseFirestore.Firestore, // Pass DB instance
+    uid: string,
+    email: string,
+    name: string
+): Promise<string> {
+
+    // STEP 1: Check your Firestore Database (Method 1)
+    // We assume you have a 'users' collection.
+    const userRef = db.collection("users").doc(uid);
+    const userSnap = await userRef.get();
+    const userData = userSnap.data();
+
+    if (userData && userData.stripeCustomerId) {
+        console.log(`Found existing Stripe ID in DB for ${email}: ${userData.stripeCustomerId}`);
+        return userData.stripeCustomerId;
+    }
+
+    // STEP 2: If not in DB, Search Stripe (Method 2)
+    console.log(`No ID in DB, searching Stripe for ${email}...`);
+    const existingCustomers = await stripe.customers.list({
+        email: email,
+        limit: 1,
+    });
+
+    let customerId: string;
+
+    if (existingCustomers.data.length > 0) {
+        // Customer exists in Stripe
+        customerId = existingCustomers.data[0].id;
+        console.log(`Found existing customer in Stripe: ${customerId}`);
+    } else {
+        // STEP 3: Create new Customer in Stripe
+        console.log(`Creating new Stripe customer for ${email}...`);
+        const newCustomer = await stripe.customers.create({
+            email: email,
+            name: name,
+            metadata: {
+                firebaseUID: uid // Good practice to link back to Firebase
+            },
+        });
+        customerId = newCustomer.id;
+    }
+
+    // STEP 4: Save the ID back to Firestore (Crucial for Method 1 to work next time)
+    // We use set with merge: true so we don't overwrite other user data
+    await userRef.set({ stripeCustomerId: customerId }, { merge: true });
+
+    return customerId;
+}
+
+
 // ==================== 1. CREATE PAYMENT INTENT ====================
 export const createPaymentIntent = onCall(
     async (request: CallableRequest<CreatePaymentIntentRequest>): Promise<CreatePaymentIntentResponse> => {
@@ -123,7 +184,7 @@ export const createPaymentIntent = onCall(
             );
         }
 
-        const { bookingId, amount, currency = "usd", email } = request.data;
+        const { bookingId, amount, currency = "usd", email, name } = request.data;
         const userId = request.auth.uid;
 
         if (!bookingId || !amount || amount <= 0) {
@@ -142,18 +203,12 @@ export const createPaymentIntent = onCall(
             const booking = bookingDoc.data();
             const vendor_id = booking?.vendor_id;
 
-            const customer = await stripe.customers.create({
-                email: email,
-                metadata: {
-                    userId,
-                    bookingId,
-                },
-            });
+            const customerId = await getOrCreateCustomer(db, userId, email, name ?? email);
 
             const paymentIntent = await stripe.paymentIntents.create({
                 amount: Math.round(amount * 100),
                 currency,
-                customer: customer.id,
+                customer: customerId,
                 metadata: {
                     userId,
                     bookingId,
@@ -532,7 +587,6 @@ export const requestRefund = onCall(
                 );
             }
 
-            console.log("booking refund ID data", bookingData?.refund_id);
             const refundId = bookingData?.refund_id;
             if (refundId && refundId.length > 0) {
                 const refundDoc = await db
@@ -921,3 +975,56 @@ export const userGetPayments = onCall(
         }
     }
 );
+
+
+
+
+// backend/functions/src/index.ts
+
+export const createMerchantAccount = onCall(async (request) => {
+    // 1. Auth Check
+    if (!request.auth) throw new HttpsError('unauthenticated', 'User must be logged in');
+
+    const { email } = request.data;
+    const userId = request.auth.uid;
+
+    try {
+        // 2. Check if user already has a stripe_account_id in Firestore
+        const userDoc = await db.collection('users').doc(userId).get();
+        let accountId = userDoc.data()?.bankDetails.account;
+
+        // 3. If not, create a new Express account
+        if (!accountId) {
+            const account = await stripe.accounts.create({
+                type: 'express',
+                country: 'CA', // OR 'FR', 'CM' (Note: Stripe Connect not supported in all African countries yet)
+                email: email,
+                capabilities: {
+                    card_payments: { requested: true },
+                    transfers: { requested: true },
+                },
+            });
+            accountId = account.id;
+
+            // Save this ID to Firestore immediately
+            await db.collection('users').doc(userId).set({
+                bankDetails: {
+                    account: accountId
+                }
+            }, { merge: true });
+        }
+
+        // 4. Create an Account Link (The URL where they verify ID)
+        const accountLink = await stripe.accountLinks.create({
+            account: accountId,
+            refresh_url: 'https://monlook-app.web.app/merchant-onboarding-refresh', // URL if they get stuck
+            return_url: 'https://monlook-app.web.app/merchant-onboarding-success', // URL when done
+            type: 'account_onboarding',
+        });
+
+        return { url: accountLink.url };
+
+    } catch (error: any) {
+        throw new HttpsError('internal', error.message);
+    }
+});

@@ -31,7 +31,7 @@ import {
     userGetPayments,
     getPaymentDetails,
     vendorGetPayments,
-    requestRefund, createPaymentIntent, stripeWebhook
+    requestRefund, createPaymentIntent, stripeWebhook, createMerchantAccount
 } from "../../listing/pay";
 
 export const listingRouter = Router();
@@ -42,6 +42,7 @@ listingRouter.all("/pay/info", wrap(getPaymentDetails));
 listingRouter.all("/pay/vendor", wrap(vendorGetPayments));
 listingRouter.all("/pay/refund", wrap(requestRefund));
 listingRouter.all("/pay/intent", wrap(createPaymentIntent));
+listingRouter.all("/pay/merchant", wrap(createMerchantAccount));
 listingRouter.all("/pay/webhook", wrap(stripeWebhook));
 
 
