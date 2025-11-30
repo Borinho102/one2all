@@ -1017,8 +1017,8 @@ export const createMerchantAccount = onCall(async (request) => {
         // 4. Create an Account Link (The URL where they verify ID)
         const accountLink = await stripe.accountLinks.create({
             account: accountId,
-            refresh_url: 'https://monlook-app.web.app/merchant-onboarding-refresh', // URL if they get stuck
-            return_url: 'https://monlook-app.web.app/merchant-onboarding-success', // URL when done
+            refresh_url: 'https://monlook.online/merchant/error.html', // URL if they get stuck
+            return_url: 'https://monlook.online/merchant/success.html', // URL when done
             type: 'account_onboarding',
         });
 
