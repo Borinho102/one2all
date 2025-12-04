@@ -678,12 +678,20 @@ export async function getBookingDetailById(req: Request, res: Response) {
  * @query/body groupBy - (optional) 'date' to group bookings by date
  * @query/body populate - (optional) JSON string of PopulateConfig array
  */
+// ============================================================
+// FIXED ENDPOINT - Correct expand logic
+// ============================================================
+
+/**
+ * 🔓 PUBLIC ENDPOINT - No authorization required
+ * Fetch bookings by mode (client or vendor) with pagination, filtering, and optional population
+ */
 export async function getBookingsByMode(req: Request, res: Response): Promise<any> {
     try {
         const mode = (req.query.mode || req.body.mode) as string;
         const id = (req.query.id || req.body.id) as string;
         const expand = (req.query.expand || req.body.expand) === 'true';
-        const type = (req.query.type || req.body.type || 'all') as string; // ✅ NEW: type filter
+        const type = (req.query.type || req.body.type || 'all') as string;
         const status = (req.query.status || req.body.status) as string | undefined;
 
         // Pagination params
@@ -751,7 +759,8 @@ export async function getBookingsByMode(req: Request, res: Response): Promise<an
         console.log(`\n🔍 Fetching bookings:`);
         console.log(`   Mode: ${mode}`);
         console.log(`   ID: ${id}`);
-        console.log(`   Type: ${type}`); // ✅ Log type filter
+        console.log(`   Type: ${type}`);
+        console.log(`   Expand: ${expand}`); // ✅ Log expand flag
         console.log(`   Page: ${page}, Limit: ${limit}`);
         console.log(`   Populate configs: ${populateConfigs?.length || 0}`);
 
@@ -764,19 +773,16 @@ export async function getBookingsByMode(req: Request, res: Response): Promise<an
             .collection(BOOKING_COLLECTION)
             .where(fieldName, '==', id);
 
-        // ✅ Apply type filter (NEW LOGIC)
+        // ✅ Apply type filter
         if (type === 'request') {
-            // request => is_admin_decision=false AND book_datetime >= now
             query = query.where('is_admin_decision', '==', false);
             query = query.where('book_datetime', '>=', now);
             console.log(`   🔹 Filter: request (is_admin_decision=false, book_datetime>=now)`);
         } else if (type === 'upcoming') {
-            // upcoming => is_admin_decision=true AND book_datetime >= now
             query = query.where('is_admin_decision', '==', true);
             query = query.where('book_datetime', '>=', now);
             console.log(`   🔹 Filter: upcoming (is_admin_decision=true, book_datetime>=now)`);
         } else if (type === 'past') {
-            // past => book_datetime < now
             query = query.where('book_datetime', '<', now);
             console.log(`   🔹 Filter: past (book_datetime<now)`);
         } else {
@@ -786,6 +792,7 @@ export async function getBookingsByMode(req: Request, res: Response): Promise<an
         // ✅ Apply additional status filter if provided
         if (status) {
             query = query.where('status', '==', status);
+            console.log(`   🔹 Filter: status=${status}`);
         }
 
         query = query.orderBy(finalSortBy, sortOrder);
@@ -801,23 +808,28 @@ export async function getBookingsByMode(req: Request, res: Response): Promise<an
                 if (cursorDoc.exists) {
                     const cursorValue = cursorDoc.get(finalSortBy);
                     query = query.startAfter(cursorValue);
+                    console.log(`   📍 Using cursor: ${cursor}`);
                 }
             } catch (error) {
                 console.warn('⚠️ Invalid cursor:', error);
             }
         } else if (page > 1) {
-            // Only apply offset if no cursor is present and page > 1
             const offset = (page - 1) * limit;
             console.log(`   📄 Applying offset: ${offset}`);
             query = query.offset(offset);
         }
 
+        console.log(`   🔄 Executing query...`);
         const snapshot = await query.limit(limit + 1).get();
 
+        console.log(`   📊 Query returned: ${snapshot.docs.length} documents`);
+
+        // ✅ Build base response for empty results
         if (snapshot.empty) {
+            console.log(`   ⚠️ No bookings found`);
+
             let responseData: any = {
                 bookings: [],
-                grouped: groupBy === 'date' ? { past: [], today: [], future: [] } : undefined,
                 count: 0,
                 mode,
                 id,
@@ -827,10 +839,10 @@ export async function getBookingsByMode(req: Request, res: Response): Promise<an
                 nextCursor: undefined,
                 totalCount: 0,
                 groupBy: groupBy || undefined,
-                type: type // ✅ Include type in response
+                type: type
             };
 
-            // ✅ Apply response-level populate
+            // ✅ Apply response-level populate even for empty results
             if (populateConfigs) {
                 responseData = await populateResponseData(responseData, populateConfigs, mode, id);
             }
@@ -855,6 +867,9 @@ export async function getBookingsByMode(req: Request, res: Response): Promise<an
             ? bookingDocs[bookingDocs.length - 1].id
             : undefined;
 
+        console.log(`   ✅ Processing ${shortCarts.length} bookings (expand: ${expand})`);
+
+        // ✅ CRITICAL FIX: Both expand and non-expand paths should be functional
         if (expand) {
             console.log(`   📦 Expanding ${shortCarts.length} bookings...`);
 
@@ -872,25 +887,76 @@ export async function getBookingsByMode(req: Request, res: Response): Promise<an
                     expandedCarts.push(fullCart);
                 } catch (error) {
                     console.error(`❌ Error expanding booking ${shortCart.id}:`, error);
+                    // Continue processing other bookings even if one fails
                 }
             }
+
+            console.log(`   ✅ Expanded ${expandedCarts.length} bookings successfully`);
 
             let responseData: any = {
                 bookings: expandedCarts,
                 count: expandedCarts.length,
                 mode,
                 id,
-                expanded: true,
+                expanded: true, // ✅ FIXED: Set to true when expanding
                 hasMore,
                 page,
                 nextCursor,
                 totalCount: expandedCarts.length,
                 groupBy,
-                type: type // ✅ Include type in response
+                type: type
             };
 
             if (groupBy === 'date') {
+                console.log(`   📅 Grouping by date...`);
                 const grouped = groupBookingsByBookDateTime(expandedCarts);
+                responseData.grouped = grouped;
+            }
+
+            // ✅ Apply response-level populate
+            if (populateConfigs) {
+                responseData = await populateResponseData(responseData, populateConfigs, mode, id);
+            }
+
+            return res.status(200).json({
+                success: true,
+                data: responseData
+            } as BookingListResponse);
+        } else {
+            // ✅ Non-expand path: enrich with user data
+            console.log(`   👤 Enriching ${shortCarts.length} bookings with user data...`);
+
+            let enrichedBookings = await Promise.all(
+                shortCarts.map(booking => enrichBookingWithUserData(booking))
+            );
+
+            // ✅ Apply populate configs to enriched bookings
+            if (populateConfigs) {
+                enrichedBookings = await Promise.all(
+                    enrichedBookings.map(booking => populateBooking(booking, populateConfigs))
+                );
+            }
+
+            console.log(`   ✅ Enriched ${enrichedBookings.length} bookings successfully`);
+
+            let responseData: any = {
+                bookings: enrichedBookings,
+                count: enrichedBookings.length,
+                mode,
+                id,
+                expanded: false, // ✅ FIXED: Set to false when enriching
+                hasMore,
+                limit,
+                page,
+                nextCursor,
+                totalCount: enrichedBookings.length,
+                groupBy,
+                type: type
+            };
+
+            if (groupBy === 'date') {
+                console.log(`   📅 Grouping by date...`);
+                const grouped = groupBookingsByBookDateTime(enrichedBookings);
                 responseData.grouped = grouped;
             }
 
@@ -905,51 +971,8 @@ export async function getBookingsByMode(req: Request, res: Response): Promise<an
             } as BookingListResponse);
         }
 
-        console.log(`   👤 Enriching ${shortCarts.length} bookings...`);
-
-        let enrichedBookings = await Promise.all(
-            shortCarts.map(booking => enrichBookingWithUserData(booking))
-        );
-
-        // ✅ Apply populate configs to enriched bookings (root, items, variants)
-        if (populateConfigs) {
-            enrichedBookings = await Promise.all(
-                enrichedBookings.map(booking => populateBooking(booking, populateConfigs))
-            );
-        }
-
-        let responseData: any = {
-            bookings: enrichedBookings,
-            count: enrichedBookings.length,
-            mode,
-            id,
-            expanded: false,
-            hasMore,
-            limit,
-            page,
-            nextCursor,
-            totalCount: enrichedBookings.length,
-            groupBy,
-            type: type // ✅ Include type in response
-        };
-
-        if (groupBy === 'date') {
-            const grouped = groupBookingsByBookDateTime(enrichedBookings);
-            responseData.grouped = grouped;
-        }
-
-        // ✅ Apply response-level populate
-        if (populateConfigs) {
-            responseData = await populateResponseData(responseData, populateConfigs, mode, id);
-        }
-
-        return res.status(200).json({
-            success: true,
-            data: responseData
-        } as BookingListResponse);
-
     } catch (error: any) {
-        console.error('Error fetching bookings by mode:', error);
+        console.error('❌ Error fetching bookings by mode:', error);
         return res.status(500).json({
             success: false,
             error: 'Failed to fetch bookings',
@@ -957,6 +980,7 @@ export async function getBookingsByMode(req: Request, res: Response): Promise<an
         });
     }
 }
+
 // ============================================================
 // HELPER FUNCTIONS
 // ============================================================
@@ -1188,8 +1212,155 @@ function configureVariantOptions(
     return configuredVariant;
 }
 
+
+// ============================================================
+// NEW ENDPOINT - Vendor Today Bookings (No Pagination)
+// ============================================================
+
+/**
+ * 🔓 PUBLIC ENDPOINT - No authorization required
+ * Fetch ALL bookings for a specific vendor scheduled for "today"
+ * Does not use pagination.
+ *
+ * @query/body vendor_id - (required) The ID of the vendor
+ * @query/body expand - (optional) 'true' to expand services, 'false' (default) for basic enrichment
+ * @query/body populate - (optional) JSON string of PopulateConfig array
+ */
+export async function getVendorTodayBookings(req: Request, res: Response) {
+    try {
+        const vendorId = (req.query.vendor_id || req.body.vendor_id) as string;
+        const expand = (req.query.expand || req.body.expand) === 'true';
+
+        // ✅ Parse populate parameter
+        let populateConfigs: PopulateConfig[] | undefined;
+        const populateParam = req.query.populate || req.body.populate;
+        if (populateParam) {
+            try {
+                populateConfigs = typeof populateParam === 'string'
+                    ? JSON.parse(populateParam)
+                    : populateParam;
+            } catch (e) {
+                console.warn('Invalid populate parameter:', e);
+            }
+        }
+
+        if (!vendorId) {
+            return res.status(400).json({
+                success: false,
+                error: 'Missing vendor_id parameter'
+            });
+        }
+
+        console.log(`\n📅 Fetching ALL today's bookings for vendor: ${vendorId}`);
+
+        // ✅ Calculate Start and End of "Today"
+        const now = new Date();
+        const startOfDay = new Date(now);
+        startOfDay.setHours(0, 0, 0, 0); // 00:00:00.000
+
+        const endOfDay = new Date(now);
+        endOfDay.setHours(23, 59, 59, 999); // 23:59:59.999
+
+        const startIso = startOfDay.toISOString();
+        const endIso = endOfDay.toISOString();
+
+        console.log(`   🕒 Time Range: ${startIso} to ${endIso}`);
+
+        // ✅ Query Firestore (Range Query)
+        // Assuming book_datetime is stored as an ISO string based on existing code patterns.
+        const snapshot = await db.collection(BOOKING_COLLECTION)
+            .where('vendor_id', '==', vendorId)
+            .where('book_datetime', '>=', startIso)
+            .where('book_datetime', '<=', endIso)
+            .orderBy('book_datetime', 'asc') // Order by time of day
+            .get();
+
+        if (snapshot.empty) {
+            return res.status(200).json({
+                success: true,
+                data: {
+                    bookings: [],
+                    count: 0,
+                    vendor_id: vendorId,
+                    date: startIso.split('T')[0]
+                }
+            });
+        }
+
+        const docs = snapshot.docs;
+        const shortCarts: CartModelShort[] = docs.map(doc => {
+            const data = doc.data() as CartModelShort;
+            data.id = doc.id;
+            return data;
+        });
+
+        console.log(`   ✅ Found ${shortCarts.length} bookings for today`);
+
+        let resultBookings: CartModel[] = [];
+
+        // ✅ Process Bookings (Expand or Enrich)
+        if (expand) {
+            console.log(`   📦 Expanding bookings...`);
+            for (const shortCart of shortCarts) {
+                try {
+                    let fullCart = await expandShortCart(shortCart);
+
+                    // Apply populate configs
+                    if (populateConfigs) {
+                        fullCart = await populateBooking(fullCart, populateConfigs);
+                    }
+
+                    resultBookings.push(fullCart);
+                } catch (error) {
+                    console.error(`Error expanding booking ${shortCart.id}:`, error);
+                }
+            }
+        } else {
+            console.log(`   👤 Enriching bookings with user data...`);
+            const enriched = await Promise.all(
+                shortCarts.map(booking => enrichBookingWithUserData(booking))
+            );
+
+            // Apply populate configs
+            if (populateConfigs) {
+                resultBookings = await Promise.all(
+                    enriched.map(booking => populateBooking(booking, populateConfigs))
+                );
+            } else {
+                resultBookings = enriched;
+            }
+        }
+
+        // ✅ Apply response-level populate if needed
+        let responseData: any = {
+            bookings: resultBookings,
+            count: resultBookings.length,
+            vendor_id: vendorId,
+            date: startIso.split('T')[0]
+        };
+
+        if (populateConfigs) {
+            responseData = await populateResponseData(responseData, populateConfigs, 'vendor', vendorId);
+        }
+
+        return res.status(200).json({
+            success: true,
+            data: responseData
+        });
+
+    } catch (error: any) {
+        console.error('❌ Error fetching today\'s bookings:', error);
+        return res.status(500).json({
+            success: false,
+            error: 'Failed to fetch bookings',
+            message: error.message
+        });
+    }
+}
+
 export default {
     getBookingDetail,
     getBookingDetailById,
     getBookingsByMode,
+    getVendorTodayBookings
 };

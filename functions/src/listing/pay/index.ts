@@ -4,6 +4,7 @@ import { Request, Response } from "express";
 import { onCall, CallableRequest, HttpsError, onRequest } from "firebase-functions/v2/https"; // Added onRequest to v2 imports
 import config from "../../config";
 import { defineSecret } from "firebase-functions/params";
+import {sendNotificationToUserInternal} from "../alert";
 
 // import { connectFirestoreEmulator } from "firebase/firestore";
 
@@ -394,6 +395,25 @@ export const stripeWebhook = onRequest(
                     console.log("Processing charge.refunded");
                     break;
 
+                case "account.updated":
+                    const account = event.data.object as Stripe.Account;
+                    // Find the user in Firestore who has this bankId
+                    const usersRef = db.collection('users');
+                    const snapshot = await usersRef.where('bankId', '==', account.id).limit(1).get();
+
+                    if (!snapshot.empty) {
+                        const userDoc = snapshot.docs[0];
+                        // Save the status to Firestore so you don't always have to call the API
+                        await userDoc.ref.update({
+                            stripe_details_submitted: account.details_submitted,
+                            stripe_payouts_enabled: account.payouts_enabled,
+                            stripe_charges_enabled: account.charges_enabled,
+                            stripe_requirements: account.requirements?.currently_due || [],
+                        });
+                        console.log(`Updated KYC status for user ${userDoc.id}`);
+                    }
+                    break;
+
                 default:
                     console.log(`Unhandled event type: ${event.type}`);
             }
@@ -709,23 +729,25 @@ export const vendorGetPayments = onCall(
         const cursor = request.data.cursor;
 
         try {
-            console.log(`Fetching payments for user: ${userId}`);
+            console.log(`Fetching payments via bookings for user: ${userId}`);
 
+            // 1. Build the Booking Query (The Driver)
             let bookingsQuery = db
                 .collection("booking")
                 .where("vendor_id", "==", userId)
-                .orderBy("created_at", "desc");
+                .orderBy("created_at", "desc"); // Pagination follows booking creation time
 
             if (cursor) {
                 const cursorDoc = await db.collection("booking").doc(cursor).get();
                 if (!cursorDoc.exists) {
+                    // Safety: If cursor doc is deleted, restart or throw
                     throw new HttpsError("invalid-argument", "Invalid cursor provided");
                 }
                 bookingsQuery = bookingsQuery.startAfter(cursorDoc);
             }
 
-            // Fetch more bookings to account for multiple transactions per booking
-            const bookingsSnapshot = await bookingsQuery.limit(pageSize * 2).get();
+            // 2. Fetch limit + 1 to check hasMore without guessing
+            const bookingsSnapshot = await bookingsQuery.limit(pageSize + 1).get();
 
             if (bookingsSnapshot.empty) {
                 return {
@@ -736,48 +758,129 @@ export const vendorGetPayments = onCall(
                 };
             }
 
-            const bookingsDocs = bookingsSnapshot.docs;
+            // 3. Determine hasMore based on the raw booking fetch
+            const hasMore = bookingsSnapshot.docs.length > pageSize;
 
-            // Extract payment and refund IDs
-            const uniquePaymentIds = new Set<string>();
+            // 4. Slice to exactly the requested page size
+            // We ignore the extra document we fetched for the hasMore check
+            const bookingsDocs = bookingsSnapshot.docs.slice(0, pageSize);
 
+            // 5. The cursor is ALWAYS the ID of the last booking in the slice
+            // This ensures the next request starts exactly after this booking.
+            const lastBooking = bookingsDocs[bookingsDocs.length - 1];
+            const nextCursor = hasMore ? lastBooking.id : undefined;
+
+            // 6. Extract Payment IDs from these specific bookings
+            const paymentIds = new Set<string>();
             bookingsDocs.forEach(doc => {
                 const data = doc.data();
-                if (data.payment_id?.trim()) {
-                    uniquePaymentIds.add(data.payment_id.trim());
+                // Ensure payment_id exists and is not empty string
+                if (data.payment_id && typeof data.payment_id === 'string' && data.payment_id.trim() !== "") {
+                    paymentIds.add(data.payment_id.trim());
                 }
             });
 
-            // Fetch payment and refund documents
-            const [paymentDocs] = await Promise.all([
-                Promise.all(Array.from(uniquePaymentIds).map(async (id) => {
-                    const doc = await db.collection("payments").doc(id).get();
-                    if (doc.exists) {
-                        return {
-                            id: doc.id,
-                            type: 'payment',
-                            ...doc.data()
-                        };
-                    }
-                    return null;
-                })),
-            ]);
+            // If no payments found in these bookings, return empty list but keep the cursor
+            // so the frontend can load the next page of bookings.
+            if (paymentIds.size === 0) {
+                return {
+                    payments: [],
+                    cursor: nextCursor,
+                    hasMore,
+                    total: 0,
+                };
+            }
 
-            // Combine, filter, and sort by timestamp
-            const allTransactions = [...paymentDocs]
-                .filter((t) => t !== null)
-                .sort((a, b) => {
-                    const timeA = new Date((a as any).timestamp).getTime();
-                    const timeB = new Date((b as any).timestamp).getTime();
-                    return timeB - timeA; // Newest first
-                });
+            // 7. Fetch the actual payment documents
+            const paymentDocs = await Promise.all(Array.from(paymentIds).map(async (id) => {
+                const doc = await db.collection("payments").doc(id).get();
+                if (doc.exists) {
+                    return {
+                        id: doc.id,
+                        // Add booking_id if needed for reference
+                        ...doc.data()
+                    };
+                }
+                return null;
+            }));
 
-            // FIXED: Limit transactions to pageSize
-            const transactions = allTransactions.slice(0, pageSize);
-            const hasMore = allTransactions.length > pageSize;
+            // 8. Filter nulls (in case a payment ref exists in booking but payment doc was deleted)
+            // OPTIONAL: You can sort these payments by timestamp if you want,
+            // but the "Page" order is dictated by the Booking 'created_at'.
+            const transactions = paymentDocs.filter((t) => t !== null);
 
-            // Get the cursor from the last booking we fetched
-            const nextCursor = hasMore ? bookingsDocs[bookingsDocs.length - 1].id : undefined;
+            return {
+                payments: transactions,
+                cursor: nextCursor,
+                hasMore,
+                total: transactions.length,
+            };
+
+        } catch (error: any) {
+            console.error("Get user payments error:", error);
+            throw new HttpsError("internal", error.message || "Failed to retrieve payments");
+        }
+    }
+);
+
+export const vendorGetPayouts = onCall(
+    async (request: CallableRequest<UserPaymentsRequest>): Promise<UserPaymentsResponse> => {
+
+        if (!request.auth || !request.auth.uid) {
+            throw new HttpsError("unauthenticated", "User must be authenticated");
+        }
+
+        const userId = request.auth.uid;
+        const pageSize = request.data.pageSize || 10;
+        const cursor = request.data.cursor;
+
+        try {
+            console.log(`Fetching direct payments for vendor: ${userId}`);
+
+            // 1. Query the 'payments' collection directly
+            // Ensure you have an index in Firestore for: vendor_id ASC/DESC, timestamp DESC
+            let paymentsQuery = db
+                .collection("payments")
+                .where("vendor_id", "==", userId) // Filter by vendor
+                .where("type", "==", "payout") // Filter by vendor
+                .orderBy("timestamp", "desc");    // Sort by newest first
+
+            // 2. Handle Cursor (Pagination)
+            if (cursor) {
+                const cursorDoc = await db.collection("payments").doc(cursor).get();
+                if (!cursorDoc.exists) {
+                    throw new HttpsError("invalid-argument", "Invalid cursor provided");
+                }
+                paymentsQuery = paymentsQuery.startAfter(cursorDoc);
+            }
+
+            // 3. Fetch pageSize + 1 to check if there is a next page
+            const paymentsSnapshot = await paymentsQuery.limit(pageSize + 1).get();
+
+            if (paymentsSnapshot.empty) {
+                return {
+                    payments: [],
+                    cursor: undefined,
+                    hasMore: false,
+                    total: 0,
+                };
+            }
+
+            // 4. Determine if there is more data
+            const hasMore = paymentsSnapshot.docs.length > pageSize;
+
+            // 5. Slice to get exactly the requested amount
+            const paymentDocs = paymentsSnapshot.docs.slice(0, pageSize);
+
+            // 6. Map documents to data objects
+            const transactions = paymentDocs.map(doc => ({
+                id: doc.id,
+                ...doc.data()
+            }));
+
+            // 7. Set the cursor to the ID of the last item returned
+            const lastPayment = paymentDocs[paymentDocs.length - 1];
+            const nextCursor = hasMore ? lastPayment.id : undefined;
 
             return {
                 payments: transactions,
@@ -979,8 +1082,11 @@ export const userGetPayments = onCall(
 
 
 
-// backend/functions/src/index.ts
 
+
+
+
+// ==================== 10. GET VENDOR STRIPE DASHBOARD LINK ====================
 export const createMerchantAccount = onCall(async (request) => {
     // 1. Auth Check
     if (!request.auth) throw new HttpsError('unauthenticated', 'User must be logged in');
@@ -990,35 +1096,52 @@ export const createMerchantAccount = onCall(async (request) => {
 
     try {
         // 2. Check if user already has a stripe_account_id in Firestore
-        const userDoc = await db.collection('users').doc(userId).get();
-        let accountId = userDoc.data()?.bankDetails.account;
+        const userRef = db.collection('users').doc(userId);
+        const userDoc = await userRef.get();
+        let accountId = userDoc.data()?.bankId;
 
-        // 3. If not, create a new Express account
+        // 3. If account exists, check if we should just return a link instead of creating new
+        if (accountId) {
+            // Optional: Check if it exists in Stripe to be safe
+            try {
+                const account = await stripe.accounts.retrieve(accountId);
+                if (account && account.details_submitted) {
+                    throw new HttpsError('already-exists', 'Merchant account already set up. Use dashboard link.');
+                }
+            } catch (e) {
+                // If ID exists in DB but not Stripe (deleted), proceed to create new
+                accountId = null;
+            }
+        }
+
+        // 4. Create new Express account if none exists
         if (!accountId) {
             const account = await stripe.accounts.create({
                 type: 'express',
-                country: 'CA', // OR 'FR', 'CM' (Note: Stripe Connect not supported in all African countries yet)
+                country: 'CA',
                 email: email,
                 capabilities: {
                     card_payments: { requested: true },
                     transfers: { requested: true },
                 },
+                metadata: {
+                    firebaseUID: userId // Link back to Firebase for safety
+                }
             });
             accountId = account.id;
 
             // Save this ID to Firestore immediately
-            await db.collection('users').doc(userId).set({
-                bankDetails: {
-                    account: accountId
-                }
+            await userRef.set({
+                bankId: accountId,
+                stripe_connect_status: 'pending'
             }, { merge: true });
         }
 
-        // 4. Create an Account Link (The URL where they verify ID)
+        // 5. Create an Account Link
         const accountLink = await stripe.accountLinks.create({
             account: accountId,
-            refresh_url: 'https://monlook.online/merchant/error.html', // URL if they get stuck
-            return_url: 'https://monlook.online/merchant/success.html', // URL when done
+            refresh_url: 'https://monlook.online/merchant/error.html',
+            return_url: 'https://monlook.online/merchant/success.html',
             type: 'account_onboarding',
         });
 
@@ -1026,5 +1149,665 @@ export const createMerchantAccount = onCall(async (request) => {
 
     } catch (error: any) {
         throw new HttpsError('internal', error.message);
+    }
+});
+
+export const getVendorDashboardLink = onCall(async (request) => {
+    // 1. Auth Check
+    if (!request.auth || !request.auth.uid) {
+        throw new HttpsError('unauthenticated', 'User must be logged in');
+    }
+
+    const userId = request.auth.uid;
+
+    try {
+        // 2. Retrieve the user's Stripe Account ID (bankId) from Firestore
+        const userDoc = await db.collection('users').doc(userId).get();
+        const userData = userDoc.data();
+        const accountId = userData?.bankId;
+
+        if (!accountId) {
+            throw new HttpsError(
+                'failed-precondition',
+                'No merchant account found. Please create an account first.'
+            );
+        }
+
+        // 3. Retrieve the account status from Stripe
+        const account = await stripe.accounts.retrieve(accountId);
+
+        // 4. Logic: Determine which link to generate
+        if (account.details_submitted) {
+            // CASE A: They have finished onboarding (KYC submitted).
+            // Generate a temporary login link to the Express Dashboard.
+            const loginLink = await stripe.accounts.createLoginLink(accountId);
+
+            return {
+                url: loginLink.url,
+                status: 'complete'
+            };
+        } else {
+            // CASE B: They started but didn't finish onboarding.
+            // Generate a new Account Link (Onboarding) to let them finish.
+            const accountLink = await stripe.accountLinks.create({
+                account: accountId,
+                refresh_url: 'https://monlook.online/merchant/dashboard', // Redirect here if user clicks "back" or reloads
+                return_url: 'https://monlook.online/merchant/dashboard',  // Redirect here on success
+                type: 'account_onboarding',
+            });
+
+            return {
+                url: accountLink.url,
+                status: 'incomplete'
+            };
+        }
+
+    } catch (error: any) {
+        console.error("Dashboard link error:", error);
+        throw new HttpsError('internal', error.message || "Failed to generate dashboard link");
+    }
+});
+
+
+// ==================== 11. GET VENDOR KYC/ACCOUNT STATUS ====================
+
+interface VendorKycStatusResponse {
+    status: 'not_created' | 'incomplete' | 'pending_verification' | 'active' | 'restricted' | 'rejected';
+    detailsSubmitted: boolean;
+    payoutsEnabled: boolean;
+    chargesEnabled: boolean;
+    requirements: string[]; // List of missing things (e.g., "bank_account", "identity_document")
+    disabledReason: string | null;
+}
+
+export const getVendorKycStatus = onCall(async (request): Promise<VendorKycStatusResponse> => {
+    // 1. Auth Check
+    if (!request.auth || !request.auth.uid) {
+        throw new HttpsError('unauthenticated', 'User must be authenticated');
+    }
+
+    const userId = request.auth.uid;
+
+    try {
+        // 2. Get Bank ID from Firestore
+        const userDoc = await db.collection('users').doc(userId).get();
+        const accountId = userDoc.data()?.bankId;
+
+        if (!accountId) {
+            return {
+                status: 'not_created',
+                detailsSubmitted: false,
+                payoutsEnabled: false,
+                chargesEnabled: false,
+                requirements: [],
+                disabledReason: null
+            };
+        }
+
+        // 3. Retrieve Account from Stripe
+        const account = await stripe.accounts.retrieve(accountId);
+
+        // 4. Extract Key Data
+        const detailsSubmitted = account.details_submitted;
+        const payoutsEnabled = account.payouts_enabled;
+        const chargesEnabled = account.charges_enabled;
+        const requirements = account.requirements?.currently_due || [];
+        const disabledReason = account.requirements?.disabled_reason || null;
+
+        // 5. Determine "Friendly" Status
+        let status: VendorKycStatusResponse['status'] = 'incomplete';
+
+        if (!detailsSubmitted) {
+            // User hasn't finished the onboarding form
+            status = 'incomplete';
+        } else if (disabledReason) {
+            // Stripe rejected the account (fraud, prohibited business, etc.)
+            status = 'rejected';
+        } else if (requirements.length > 0) {
+            // User finished form, but Stripe needs more info (ID scan, etc.)
+            // If payouts are disabled, it's restricted. If just waiting, it might be pending.
+            if (!payoutsEnabled) {
+                status = 'restricted';
+            } else {
+                status = 'pending_verification';
+            }
+        } else if (payoutsEnabled && chargesEnabled) {
+            // Everything is perfect
+            status = 'active';
+        } else {
+            // Fallback (e.g. under review)
+            status = 'pending_verification';
+        }
+
+        return {
+            status,
+            detailsSubmitted,
+            payoutsEnabled,
+            chargesEnabled,
+            requirements, // Send this list to UI to show "Missing: ID Scan", etc.
+            disabledReason
+        };
+
+    } catch (error: any) {
+        console.error("Get KYC Status Error:", error);
+        throw new HttpsError('internal', error.message || "Failed to retrieve account status");
+    }
+});
+
+
+
+
+
+
+function checkDateStatus(dateString: string) {
+    const inputDate = new Date(dateString);
+    const today = new Date(); // Currently Dec 4, 2025
+
+    // 1. Reset time to midnight (00:00:00.000) for BOTH dates
+    inputDate.setHours(0, 0, 0, 0);
+    today.setHours(0, 0, 0, 0);
+
+    // 2. Compare using .getTime() to avoid object reference issues
+    if (inputDate.getTime() === today.getTime()) {
+        return "TODAY";
+    } else if (inputDate < today) {
+        return "PAST";
+    } else {
+        return "FUTURE";
+    }
+}
+
+export const vendorStat = onCall(async (request) => {
+    // 1. Auth Check
+    if (!request.auth) throw new HttpsError('unauthenticated', 'User must be logged in');
+
+    const userId = request.auth.uid;
+
+    const bookingSnapshot = await db.collection("bookings")
+        .where('vendor_id', '==', userId)
+        .get();
+
+    const docs = bookingSnapshot.docs;
+
+    const cancelledBooking = docs.map(doc => {
+        const d: any = doc as any;
+        if(d.status == 'CANCELED' && d.cancelled_date != null){
+            return d;
+        }
+        return null;
+    });
+
+    const pendingBooking = docs.map(doc => {
+        const d: any = doc as any;
+        if(d.is_admin_decision === null){
+            return d;
+        }
+        return null;
+    });
+
+    const approvedBooking = docs.map(doc => {
+        const d: any = doc as any;
+        if(d.is_admin_decision === true && d.decision_date !== null){
+            return d;
+        }
+        return null;
+    });
+
+    const rejectedBooking = docs.map(doc => {
+        const d: any = doc as any;
+        if(d.is_admin_decision === false && d.decision_date !== null){
+            return d;
+        }
+        return null;
+    });
+
+    const completeBooking = docs.map(doc => {
+        const d: any = doc as any;
+        const bookingDate = new Date(d.book_datetime);
+        // 2. The current moment (Simulated as Dec 4, 2025)
+        const now = new Date();
+        // 3. Check if passed (Is Booking Date < Now?)
+        const isPassed = bookingDate < now;
+        if(d.is_admin_decision === true && d.decision_date !== null && isPassed && d.client_approved === true && d.vendor_approved === true &&
+            d.client_approved_timestamp !== null && d.vendor_approved_timestamp !== null){
+            return d;
+        }
+        return null;
+    });
+
+    const todayBooking = docs.map(doc => {
+        const d: any = doc as any;
+        if(checkDateStatus(d.book_datetime) === "TODAY"){
+            return d;
+        }
+        return null;
+    });
+
+    try {
+        return {
+            user: userId,
+            rsvp: {
+                approved: approvedBooking.length,
+                cancelled: cancelledBooking.length,
+                rejected: rejectedBooking.length,
+                pending: pendingBooking.length,
+                total: docs.length,
+                complete: completeBooking.length,
+                today: todayBooking.length
+            },
+            visitor: {
+                organic: 10,
+                gross: 539
+            },
+            payment: {
+                revenue: 1350,
+                payout: 500,
+                earning: 700,
+                lost: 0,
+                pending: 200,
+            }
+        };
+
+    } catch (error: any) {
+        throw new HttpsError('internal', error.message);
+    }
+});
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// ==================== 12. RELEASE FUNDS TO VENDOR (PAYOUT/TRANSFER) ====================
+
+
+// export const releaseFundsToVendor = onCall(async (request: CallableRequest<ReleaseFundsRequest>) => {
+//     // 1. Auth Check (Security: Only Admin or the Vendor themselves can trigger this?)
+//     // Usually, this is triggered automatically via a Cron job or by Admin.
+//     // For this example, let's allow the Vendor to "Claim" funds after service is done,
+//     // or Admin to release it.
+//
+//     if (!request.auth) {
+//         throw new HttpsError('unauthenticated', 'User must be logged in');
+//     }
+//
+//     const now = new Date();
+//     const threeDaysInMillis = 3 * 24 * 60 * 60 * 1000;
+//     const callerId = request.auth.uid;
+//
+//     try {
+//         const bookingRef = db.collection("booking")
+//             .where("vendor_id", "==", callerId)
+//             .where("is_admin_decision", "==", true)
+//             .where("vendor_approved", "==", true)
+//             .where("payment_id", "!=", null); // ✅ Only ONE inequality allowed here
+//
+//         const bookingDoc = await bookingRef.get();
+//
+//         // ⚠️ LOGIC FIX: Check if empty to throw "Not Found"
+//         // (Your previous code threw an error if documents DID exist)
+//         if (bookingDoc.empty) {
+//             throw new HttpsError('not-found', 'No Payouts Available');
+//         }
+//
+//         let payments: any = [];
+//
+//         for (const doc of bookingDoc.docs) {
+//             const data = doc.data();
+//             // 🔍 Filter the remaining conditions in JavaScript
+//             // Checking if timestamps exist
+//
+//             const bookDate = new Date(data.book_datetime);
+//             const timeDifference = now.getTime() - bookDate.getTime();
+//
+//             if (
+//                 (data.refund_id == null || data.refund_id.length > 0) &&
+//                 (data.payout_id == null || data.payout_id.length > 0) &&
+//                 ((data.client_approved == true  && data.client_approved_timestamp) || (timeDifference > threeDaysInMillis)) &&
+//                 data.vendor_approved_timestamp && data.decision_date
+//             ) {
+//                 const paymentRef = db.collection("payments").doc(data.payment_id);
+//                 const paymentDoc = await paymentRef.get();
+//                 if (!paymentDoc.exists) {
+//                     throw new HttpsError('not-found', 'Payment not found');
+//                 }
+//                 const paymentData: any = paymentDoc.data();
+//                 if(
+//                     paymentData.status.toString().toUpperCase() == "PAID" &&
+//                     paymentData.success.toString().toUpperCase() == "SUCCESS" &&
+//                     paymentData.payout_id == null){
+//                     payments.push(paymentData);
+//                 }
+//             }
+//         }
+//
+//         // 5. Get Vendor's Stripe Account ID (Connect ID)
+//         const vendorUserDoc = await db.collection("users").doc(callerId).get();
+//         const vendorStripeId = vendorUserDoc.data()?.bankId;
+//
+//         if (!vendorStripeId) {
+//             throw new HttpsError('failed-precondition', 'Vendor has not set up a Stripe Payout Account');
+//         }
+//
+//         // // 6. Calculate Split (Commission)
+//         // // Example: Platform keeps 10%, Vendor gets 90%
+//         // const totalAmount = paymentData.amount; // e.g., 100.00
+//         // const commissionRate = 0.10; // 10%
+//         // const platformFee = totalAmount * commissionRate;
+//         // const payoutAmount = totalAmount - platformFee;
+//         //
+//         // // Convert to cents for Stripe (Stripe uses integers)
+//         // const transferAmountCents = Math.round(payoutAmount * 100);
+//         //
+//         // console.log(`Processing Transfer: Total: ${totalAmount}, Fee: ${platformFee}, Payout: ${payoutAmount} to ${vendorStripeId}`);
+//         //
+//         // // 7. Execute Stripe Transfer
+//         // // This moves money from Your Platform Balance -> Vendor's Connected Account
+//         // const transfer = await stripe.transfers.create({
+//         //     amount: transferAmountCents,
+//         //     currency: paymentData.currency || 'cad',
+//         //     destination: vendorStripeId,
+//         //     description: `Payout for Booking #${bookingId}`,
+//         //     metadata: {
+//         //         bookingId: bookingId,
+//         //         vendorId: vendorId,
+//         //         platformFee: platformFee.toString()
+//         //     }
+//         //     // source_transaction: paymentData.transaction_id, // OPTIONAL: Tries to link to specific incoming charge (requires charge to be valid)
+//         // });
+//         //
+//         // // 8. Record the Transaction in Firestore
+//         // const timestamp = new Date().toISOString();
+//         // const payoutId = transfer.id;
+//         //
+//         // await db.collection("payments").doc(payoutId).create({
+//         //     amount: payoutAmount,
+//         //     currency: paymentData.currency,
+//         //     gateway: "stripe",
+//         //     success: "SUCCESS",
+//         //     status: "COMPLETED",
+//         //     timestamp: timestamp,
+//         //     transaction_id: transfer.id,
+//         //     type: "payout", // Marking this as a Payout/Transfer
+//         //     vendor_id: vendorId,
+//         //     booking_id: bookingId,
+//         //     data: transfer,
+//         //     metadata: {
+//         //         commission: platformFee,
+//         //         original_payment_id: paymentId
+//         //     },
+//         //     created_at: timestamp,
+//         //     updated_at: timestamp,
+//         // });
+//         //
+//         // // 9. Update Booking Status
+//         // await bookingRef.update({
+//         //     payout_id: payoutId,
+//         //     payout_status: "COMPLETED",
+//         //     payout_amount: payoutAmount,
+//         //     updated_at: timestamp
+//         // });
+//         //
+//         return {
+//             success: true,
+//             account: vendorStripeId,
+//             vendor: callerId,
+//             payments: payments
+//             // transferId: transfer.id,
+//             // amount: payoutAmount,
+//             // fee: platformFee
+//         };
+//
+//     } catch (error: any) {
+//         console.error("Payout Release Error:", error);
+//         throw new HttpsError('internal', error.message || "Failed to release funds");
+//     }
+// });
+
+
+// Interface for the return object
+interface PayoutResult {
+    bookingId: string;
+    amount: number;
+    status: "SUCCESS" | "FAILED";
+    error?: string;
+    transferId?: string;
+}
+
+export const releaseFundsToVendor = onCall(async (request: CallableRequest<any>) => {
+    // 1. Auth Check
+    if (!request.auth) {
+        throw new HttpsError('unauthenticated', 'User must be logged in');
+    }
+
+    const callerId = request.auth.uid;
+    const now = new Date();
+    const threeDaysInMillis = 3 * 24 * 60 * 60 * 1000;
+
+    try {
+        // 2. Get Vendor's Stripe Account ID first
+        const vendorUserDoc = await db.collection("users").doc(callerId).get();
+        const vendorStripeId = vendorUserDoc.data()?.bankId;
+
+        if (!vendorStripeId) {
+            throw new HttpsError('failed-precondition', 'Vendor has not set up a Stripe Payout Account');
+        }
+
+        // 3. Query Potential Bookings
+        const bookingRef = db.collection("booking")
+            .where("vendor_id", "==", callerId)
+            .where("vendor_approved", "==", true)
+            .where("payment_id", "!=", null); // Ensure payment exists
+
+        const bookingSnap = await bookingRef.get();
+
+        if (bookingSnap.empty) {
+            throw new HttpsError('not-found', 'No bookings found for this vendor');
+        }
+
+        // 4. Identify Eligible Bookings & Fetch Payment Details
+        // We will store promises here to run in parallel
+        const eligibleItems: { booking: any; payment: any; bookingDocRef: any }[] = [];
+
+        // Pre-fetch logic
+        for (const doc of bookingSnap.docs) {
+            const data = doc.data();
+            const bookDate = new Date(data.book_datetime);
+            const timeDifference = now.getTime() - bookDate.getTime();
+
+            // LOGIC FIX:
+            // 1. Refund ID should be null or empty string (NOT length > 0, which implies it exists)
+            // 2. Payout ID should be null or empty string
+            const isRefunded = data.refund_id && data.refund_id.length > 0;
+            const isPaidOut = data.payout_id && data.payout_id.length > 0;
+
+            // 3. Client Approval OR 3 Days passed
+            const isAutoApproved = timeDifference > threeDaysInMillis && data.client_approved == null && data.client_approved_timestamp == null;
+            const isClientApproved = data.client_approved === true;
+
+            if (!isRefunded && !isPaidOut && (isClientApproved || isAutoApproved)) {
+                // Fetch the payment document
+                // Note: For high volume, it is better to do a "where-in" query, but this works for <50 items
+                const paymentDoc = await db.collection("payments").doc(data.payment_id).get();
+
+                if (paymentDoc.exists) {
+                    const paymentData = paymentDoc.data() as any;
+
+                    // Verify Payment Success
+                    if (
+                        paymentData.status?.toString().toUpperCase() === "PAID" &&
+                        paymentData.success?.toString().toUpperCase() === "SUCCESS" &&
+                        !paymentData.payout_id // Double check payment doc doesn't have payout
+                    ) {
+                        eligibleItems.push({
+                            booking: {
+                                ...data,      // Spread data first
+                                id: doc.id    // This will overwrite the 'id' from data with the Firestore UID
+                            },
+                            bookingDocRef: doc.ref,
+                            payment: {
+                                id: paymentDoc.id,
+                                ...paymentData
+                            }
+                        });
+                    }
+                }
+            }
+        }
+
+        if (eligibleItems.length === 0) {
+            return {
+                success: true,
+                message: "No eligible payouts found at this time.",
+                results: []
+            };
+        }
+
+        // 5. Process Transfers & Database Updates
+        const results: PayoutResult[] = [];
+        const batch = db.batch();
+        let batchCount = 0; // Firestore batch limit is 500 operations
+
+        console.log(`Processing ${eligibleItems.length} eligible payouts...`);
+
+        // We process sequentially or via Promise.all.
+        // Sequential is safer for rate limits if you have many.
+        // Using Promise.all for speed here, assuming < 50 items.
+
+        await Promise.all(eligibleItems.map(async (item) => {
+            const { booking, payment, bookingDocRef } = item;
+
+            const vendorUserDoc = await db.collection("users").doc(callerId).get();
+            const vendorStripeId = vendorUserDoc.data()?.bankId;
+            const vendorRate = vendorUserDoc.data()?.rate;
+
+            console.log("FETCHED RATE:", vendorRate);
+
+            try {
+                // Calculation
+                const totalAmount = parseFloat(payment.amount);
+                const commissionRate = parseFloat(vendorRate ?? 10) / 100;
+                const platformFee = totalAmount * commissionRate;
+                const payoutAmount = totalAmount - platformFee;
+                const transferAmountCents = Math.round(payoutAmount * 100);
+
+                // Stripe Transfer
+                const transfer = await stripe.transfers.create({
+                    amount: transferAmountCents,
+                    currency: payment.currency || 'cad',
+                    destination: vendorStripeId,
+                    description: `Payout for Booking #${booking.id}`,
+                    metadata: {
+                        bookingId: booking.id,
+                        vendorId: callerId,
+                        platformFee: platformFee.toFixed(2)
+                    }
+                });
+
+                const timestamp = new Date().toISOString();
+
+                // 1. Create Payout Record
+                const payoutRef = db.collection("payments").doc(transfer.id);
+                batch.create(payoutRef, {
+                    amount: payoutAmount,
+                    currency: payment.currency,
+                    gateway: "stripe",
+                    success: "SUCCESS",
+                    status: "COMPLETED",
+                    timestamp: timestamp,
+                    transaction_id: transfer.id,
+                    type: "payout",
+                    vendor_id: callerId,
+                    booking_id: booking.id,
+                    data: transfer,
+                    metadata: {
+                        commission: platformFee,
+                        original_payment_id: payment.id
+                    },
+                    created_at: timestamp,
+                });
+
+                // 2. Update Booking
+                batch.update(bookingDocRef, {
+                    payout_id: transfer.id,
+                    payout_status: "COMPLETED",
+                    payout_amount: payoutAmount,
+                    updated_at: timestamp
+                });
+
+                // 3. Update Original Payment (Mark as paid out)
+                // ✅ This will now work because payment.id is defined
+                const originalPaymentRef = db.collection("payments").doc(payment.id);
+                batch.update(originalPaymentRef, {
+                    payout_id: transfer.id,
+                    payout_status: "COMPLETED"
+                });
+
+                batchCount += 3;
+
+                results.push({
+                    bookingId: booking.id,
+                    amount: payoutAmount,
+                    status: "SUCCESS",
+                    transferId: transfer.id
+                });
+
+            } catch (err: any) {
+                console.error(`Failed to pay booking ${booking.id}:`, err);
+                results.push({
+                    bookingId: booking.id,
+                    amount: 0,
+                    status: "FAILED",
+                    error: err.message
+                });
+            }
+        }));
+
+        // 6. Commit Database Changes
+        // Only commit if we have operations (at least one success)
+        if (batchCount > 0) {
+            await batch.commit();
+        }
+
+        // 7. Return Summary
+        const successCount = results.filter(r => r.status === "SUCCESS").length;
+        const failedCount = results.filter(r => r.status === "FAILED").length;
+
+        await sendNotificationToUserInternal(
+            "Payouts",
+            "A payout request has been submitted",
+            {},
+            callerId
+        )
+
+        return {
+            success: true,
+            vendor: callerId,
+            processed: results.length,
+            successful: successCount,
+            failed: failedCount,
+            results: results
+        };
+
+    } catch (error: any) {
+        console.error("Bulk Payout Error:", error);
+        throw new HttpsError('internal', error.message || "Failed to process payouts");
     }
 });

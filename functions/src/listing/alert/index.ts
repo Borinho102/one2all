@@ -256,7 +256,7 @@ const sendNotificationToTopic = async (
 };
 
 // Internal function - used by other endpoints
-const sendNotificationToUserInternal = async (
+export const sendNotificationToUserInternal = async (
     title: string,
     body: string,
     customData: Record<string, string>,

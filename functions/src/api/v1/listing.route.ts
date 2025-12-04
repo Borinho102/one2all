@@ -14,7 +14,7 @@ import {
 } from "../../listing/search";
 
 import {
-    getBookingDetail, getBookingDetailById, getBookingsByMode
+    getBookingDetail, getBookingDetailById, getBookingsByMode, getVendorTodayBookings
 } from "../../listing/book";
 
 import {
@@ -31,7 +31,15 @@ import {
     userGetPayments,
     getPaymentDetails,
     vendorGetPayments,
-    requestRefund, createPaymentIntent, stripeWebhook, createMerchantAccount
+    vendorStat,
+    vendorGetPayouts,
+    requestRefund,
+    createPaymentIntent,
+    stripeWebhook,
+    createMerchantAccount,
+    getVendorDashboardLink,
+    getVendorKycStatus,
+    releaseFundsToVendor
 } from "../../listing/pay";
 
 export const listingRouter = Router();
@@ -40,10 +48,17 @@ export const listingRouter = Router();
 listingRouter.all("/pay/user", wrap(userGetPayments));
 listingRouter.all("/pay/info", wrap(getPaymentDetails));
 listingRouter.all("/pay/vendor", wrap(vendorGetPayments));
+listingRouter.all("/pay/payout", wrap(vendorGetPayouts));
 listingRouter.all("/pay/refund", wrap(requestRefund));
 listingRouter.all("/pay/intent", wrap(createPaymentIntent));
 listingRouter.all("/pay/merchant", wrap(createMerchantAccount));
 listingRouter.all("/pay/webhook", wrap(stripeWebhook));
+listingRouter.all("/pay/admin", wrap(getVendorDashboardLink));
+listingRouter.all("/pay/status", wrap(getVendorKycStatus));
+listingRouter.all("/pay/funds", wrap(releaseFundsToVendor));
+
+
+listingRouter.all("/stats", wrap(vendorStat));
 
 
 /**
@@ -313,6 +328,7 @@ listingRouter.get("/booking-detail-by-id", wrap(getBookingDetailById));
  *         description: Server error
  */
 listingRouter.all("/bookings-by-mode", wrap(getBookingsByMode));
+listingRouter.all("/today-booking", wrap(getVendorTodayBookings));
 
 
 listingRouter.all("/notification", wrap(sendBatchNotifications));
