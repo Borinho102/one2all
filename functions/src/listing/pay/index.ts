@@ -453,6 +453,7 @@ async function handlePaymentSucceeded(paymentIntent: Stripe.PaymentIntent) {
            booking_id: bookingId,
            metadata: metadata, currency: paymentIntent.currency
         },
+        vendor_id: vendor_id,
         updated_at: new Date().toISOString(),
     });
 
@@ -1299,23 +1300,7 @@ export const getVendorKycStatus = onCall(async (request): Promise<VendorKycStatu
 
 
 
-function checkDateStatus(dateString: string) {
-    const inputDate = new Date(dateString);
-    const today = new Date(); // Currently Dec 4, 2025
 
-    // 1. Reset time to midnight (00:00:00.000) for BOTH dates
-    inputDate.setHours(0, 0, 0, 0);
-    today.setHours(0, 0, 0, 0);
-
-    // 2. Compare using .getTime() to avoid object reference issues
-    if (inputDate.getTime() === today.getTime()) {
-        return "TODAY";
-    } else if (inputDate < today) {
-        return "PAST";
-    } else {
-        return "FUTURE";
-    }
-}
 
 export const vendorStat = onCall(async (request) => {
     // 1. Auth Check
@@ -1323,65 +1308,115 @@ export const vendorStat = onCall(async (request) => {
 
     const userId = request.auth.uid;
 
-    const bookingSnapshot = await db.collection("bookings")
-        .where('vendor_id', '==', userId)
-        .get();
+    const [bookingSnapshot, analyticsSnapshot, paymentSnapshot] = await Promise.all([
+        db.collection("booking").where('vendor_id', '==', userId).get(),
+        db.collection("pageviews").where('business', '==', userId).where('type', '==', 'pageview').get(),
+        db.collection("payments").where('vendor_id', '==', userId).get()
+    ]);
 
-    const docs = bookingSnapshot.docs;
-
-    const cancelledBooking = docs.map(doc => {
-        const d: any = doc as any;
-        if(d.status == 'CANCELED' && d.cancelled_date != null){
-            return d;
-        }
-        return null;
+    const payments = paymentSnapshot.docs.map(doc => doc.data());
+    const payouts = payments.filter((d: any) => {
+        return d.type === "payout" && d.success === 'SUCCESS' &&  d.status === 'COMPLETED';
     });
 
-    const pendingBooking = docs.map(doc => {
-        const d: any = doc as any;
-        if(d.is_admin_decision === null){
-            return d;
-        }
-        return null;
+    const totalPayout = payouts.reduce((sum: number, item: any) => {
+        return sum + (Number(item.amount) || 0);
+    }, 0);
+
+    // EXTRACT DATA FIRST
+    // usage of .data() is crucial unless you are using a Firestore Converter
+    const bookings = bookingSnapshot.docs.map(doc => doc.data());
+    const now = new Date(); // Define 'now' once
+
+    const totalRevenue = bookings.reduce((sum: number, item: any) => {
+        return sum + (Number(item.total_amount) || 0);
+    }, 0);
+
+    // 1. Cancelled
+    const cancelledBooking = bookings.filter((d: any) => {
+        return d.status == 'CANCELED' && d.cancelled_date != null;
     });
 
-    const approvedBooking = docs.map(doc => {
-        const d: any = doc as any;
-        if(d.is_admin_decision === true && d.decision_date !== null){
-            return d;
-        }
-        return null;
+    // 2. Pending (Admin hasn't decided yet)
+    const pendingBooking = bookings.filter((d: any) => {
+        // Ensure it's not cancelled
+        return d.is_admin_decision === null && d.status !== 'CANCELED';
     });
 
-    const rejectedBooking = docs.map(doc => {
-        const d: any = doc as any;
-        if(d.is_admin_decision === false && d.decision_date !== null){
-            return d;
-        }
-        return null;
+    // 3. Approved
+    const approvedBooking = bookings.filter((d: any) => {
+        return d.is_admin_decision === true && d.decision_date !== null;
     });
 
-    const completeBooking = docs.map(doc => {
-        const d: any = doc as any;
+    // 4. Rejected
+    const rejectedBooking = bookings.filter((d: any) => {
+        return d.is_admin_decision === false && d.decision_date !== null;
+    });
+
+    // 5. Complete
+    const completeBooking = bookings.filter((d: any) => {
         const bookingDate = new Date(d.book_datetime);
-        // 2. The current moment (Simulated as Dec 4, 2025)
-        const now = new Date();
-        // 3. Check if passed (Is Booking Date < Now?)
         const isPassed = bookingDate < now;
-        if(d.is_admin_decision === true && d.decision_date !== null && isPassed && d.client_approved === true && d.vendor_approved === true &&
-            d.client_approved_timestamp !== null && d.vendor_approved_timestamp !== null){
-            return d;
-        }
-        return null;
+
+        return (
+            d.is_admin_decision === true &&
+            d.decision_date !== null &&
+            isPassed &&
+            d.client_approved === true &&
+            d.vendor_approved === true &&
+            d.client_approved_timestamp !== null &&
+            d.vendor_approved_timestamp !== null
+        );
     });
 
-    const todayBooking = docs.map(doc => {
-        const d: any = doc as any;
-        if(checkDateStatus(d.book_datetime) === "TODAY"){
-            return d;
-        }
-        return null;
+    // 6. Today
+    const todayBooking = bookings.filter((d: any) => {
+        return checkDateStatus(d.book_datetime) === "TODAY";
     });
+
+    // ==========================================
+    // 2. VISITOR LOGIC (Gross vs Organic)
+    // ==========================================
+    const analyticsDocs = analyticsSnapshot.docs.map(doc => doc.data());
+
+    // GROSS: Total count of documents found
+    const grossCount = analyticsDocs.length;
+
+    // ORGANIC: Count of unique user IDs
+    // We map to get just the 'user' strings, then put them in a Set (which removes duplicates)
+    const uniqueUsers = new Set(analyticsDocs.map((d: any) => d.user));
+    const organicCount = uniqueUsers.size;
+
+
+    const rsvpSnapshot = await db.collection("booking").where('vendor_id', '==', userId).where('refund_id', '==', null).get();
+    const rsvpDocs = rsvpSnapshot.docs.map(doc => doc.data());
+    // 1. Extract all Payment IDs from the bookings
+    // We use a Set to ensure we don't fetch the same payment ID twice (if duplicates exist)
+    const paymentIds = [...new Set(
+        rsvpDocs
+            .map((d: any) => d.payment_id)
+            .filter((id: any) => id != null) // Ensure ID is not null
+    )];
+
+    // 2. Fetch all corresponding Payment documents in parallel
+    // (Much faster than fetching them one by one in a loop)
+    const paymentSnapshots = await Promise.all(
+        paymentIds.map((id: string) => db.collection("payments").doc(id).get())
+    );
+
+    // 3. Sum the Amount based on your criteria
+    const earnings = paymentSnapshots.reduce((sum: number, doc) => {
+        const p: any = doc.data();
+
+        if (!p) return sum;
+
+        if (p.type == "payment" && p.status === 'PAID' && p.success === 'SUCCESS') {
+            return sum + (Number(p.amount) || 0);
+        }
+
+        return sum;
+    }, 0);
+
 
     try {
         return {
@@ -1391,20 +1426,20 @@ export const vendorStat = onCall(async (request) => {
                 cancelled: cancelledBooking.length,
                 rejected: rejectedBooking.length,
                 pending: pendingBooking.length,
-                total: docs.length,
+                total: bookings.length,
                 complete: completeBooking.length,
                 today: todayBooking.length
             },
             visitor: {
-                organic: 10,
-                gross: 539
+                organic: organicCount, // Unique
+                gross: grossCount      // Total
             },
             payment: {
-                revenue: 1350,
-                payout: 500,
-                earning: 700,
+                revenue: totalRevenue,
+                payout: totalPayout,
+                earning: earnings,
                 lost: 0,
-                pending: 200,
+                pending: 0,
             }
         };
 
@@ -1413,7 +1448,23 @@ export const vendorStat = onCall(async (request) => {
     }
 });
 
+// Helper function needed inside the scope or imported
+function checkDateStatus(dateString: string) {
+    if(!dateString) return "FUTURE"; // Safety check
+    const inputDate = new Date(dateString);
+    const today = new Date();
 
+    inputDate.setHours(0, 0, 0, 0);
+    today.setHours(0, 0, 0, 0);
+
+    if (inputDate.getTime() === today.getTime()) {
+        return "TODAY";
+    } else if (inputDate < today) {
+        return "PAST";
+    } else {
+        return "FUTURE";
+    }
+}
 
 
 
