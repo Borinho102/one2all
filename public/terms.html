@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MonLook - Conditions Générales d'Utilisation</title>
+    <link rel="icon" href="./favicon.png"/>
+    <!-- 1. Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- 2. Fonts & Styles -->
+    <style>
+        @font-face {
+            font-family: 'Atlantis Famingo Regular';
+            font-style: normal;
+            font-weight: normal;
+            src: local('Atlantis Famingo Regular'), url('./AtlantisFamingo-E4aor.woff') format('woff');
+        }
+        .font {
+            font-family: 'Atlantis Famingo Regular';
+        }
+        /* Custom scrollbar */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #f1f1f1; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+        html { scroll-behavior: smooth; }
+    </style>
+
+    <!-- 3. Load Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+</head>
+<body class="bg-[#F8FAFC] text-slate-600 font-sans antialiased">
+
+<!-- =========================
+     HEADER
+========================== -->
+<header>
+    <nav class="w-full absolute left-0 top-0 !z-[50]">
+        <div class="container max-w-6xl mx-auto px-4 h-24 flex items-center justify-between">
+            <div class="flex-shrink-0">
+                <a href="index.html" class="block !text-decoration-none">
+                    <svg width="50" height="63" viewBox="0 0 50 63" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M0.0100002 24.5158V50.0458C0.0100002 50.8458 0.779999 51.4058 1.54 51.1758L12.75 47.7258C13.32 47.5458 13.28 46.7458 12.69 46.6158C7.22 45.3858 3.14 40.4958 3.14 34.6658V22.7058C3.14 19.3258 4.51 16.2558 6.72 14.0458C8.95 11.8258 12.03 10.4458 15.43 10.4558C22.24 10.4758 27.64 16.2558 27.64 23.0658V46.5858C27.64 52.4558 21.96 56.7758 16.27 55.4158L49.01 62.9658C49.01 62.9658 49.06 62.9558 49.06 62.9258V25.0658C49.06 11.6358 38.49 0.295798 25.06 0.0057984C18.08 -0.144202 11.74 2.6258 7.19 7.1858C2.75 11.6258 0 17.7558 0 24.5358L0.0100002 24.5158Z" fill="white"/>
+                    </svg>
+                </a>
+            </div>
+
+            <div class="hidden md:flex items-center gap-16 justify-end text-sm font-medium">
+                <a href="index.html" class="text-gray-300 hover:text-white transition-colors">Accueil</a>
+                <a href="contact.html" class="text-gray-300 hover:text-white transition-colors">Contact</a>
+            </div>
+
+            <div>
+                <div class="p-2 bg-[#1e2235]/60 backdrop-blur-md rounded-[20px] min-w-[200px] border border-white/10 shadow-2xl">
+                    <button class="w-full items-center justify-center bg-[#8fa1d8] hover:bg-[#7c8ec9] flex text-white text-lg font-normal py-2 rounded-[12px] shadow-inner transition-colors duration-200">
+                        Télécharger
+                        <i data-lucide="download" class="ml-2 h-4 w-4"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </nav>
+</header>
+
+<!-- =========================
+     HERO SECTION
+========================== -->
+<section class="relative w-full pt-[10rem] pb-32 bg-[#1A1F49] overflow-hidden">
+    <!-- Background Blobs -->
+    <div class="absolute top-0 right-0 w-[600px] h-[600px] bg-blue-900/20 rounded-full blur-[120px] pointer-events-none"></div>
+    <div class="absolute bottom-0 left-0 w-[400px] h-[400px] bg-[#F7B0AC]/10 rounded-full blur-[100px] pointer-events-none"></div>
+
+    <div class="container mx-auto px-4 relative z-10 text-center">
+        <h1 class="text-4xl md:text-5xl font font-bold text-white mb-6 leading-tight">
+            Conditions Générales <br/><span class="text-[#F7B0AC]">d'Utilisation</span>
+        </h1>
+        <p class="text-slate-300 text-lg max-w-2xl mx-auto leading-relaxed">
+            Veuillez lire attentivement les présentes conditions avant d'utiliser l'application MonLook. Elles régissent votre accès et votre utilisation de nos services.
+        </p>
+        <p class="text-slate-400 text-sm mt-4">
+            Dernière mise à jour : <span class="font-medium text-slate-200">06 Décembre 2025</span>
+        </p>
+    </div>
+</section>
+
+<!-- =========================
+     LEGAL CONTENT
+========================== -->
+<section class="relative w-full -mt-20 mb-20 z-20">
+    <div class="container mx-auto px-4">
+
+        <!-- White Paper Card -->
+        <div class="bg-white rounded-[3rem] p-8 md:p-16 max-w-4xl mx-auto shadow-xl shadow-slate-200/50 border border-slate-100">
+
+            <div class="space-y-12">
+
+                <!-- 1. Acceptation -->
+                <div>
+                    <div class="flex items-center gap-4 mb-4">
+                        <div class="w-10 h-10 rounded-full bg-[#1A1F49] flex items-center justify-center text-white font-bold">1</div>
+                        <h2 class="text-2xl font-bold text-[#1A1F49] font-display">Acceptation des conditions</h2>
+                    </div>
+                    <p class="leading-relaxed">
+                        En téléchargeant, installant ou utilisant l'application <strong>MonLook</strong>, vous acceptez sans réserve les présentes Conditions Générales d'Utilisation (CGU). Si vous n'acceptez pas ces termes, veuillez ne pas utiliser nos services.
+                    </p>
+                </div>
+
+                <!-- 2. Description du Service -->
+                <div>
+                    <div class="flex items-center gap-4 mb-4">
+                        <div class="w-10 h-10 rounded-full bg-[#1A1F49] flex items-center justify-center text-white font-bold">2</div>
+                        <h2 class="text-2xl font-bold text-[#1A1F49] font-display">Description du service</h2>
+                    </div>
+                    <p class="mb-4">
+                        MonLook est une plateforme technologique de mise en relation permettant aux utilisateurs ("Clients") de rechercher, réserver et payer des prestations de beauté auprès de professionnels indépendants ou de salons ("Partenaires").
+                    </p>
+                    <div class="bg-blue-50 p-4 rounded-xl border border-blue-100 text-sm text-slate-700">
+                        <strong>Note importante :</strong> MonLook agit en tant qu'intermédiaire technique et n'est pas responsable de l'exécution finale de la prestation de beauté, qui relève de la responsabilité exclusive du Partenaire.
+                    </div>
+                </div>
+
+                <!-- 3. Comptes Utilisateurs -->
+                <div>
+                    <div class="flex items-center gap-4 mb-4">
+                        <div class="w-10 h-10 rounded-full bg-[#1A1F49] flex items-center justify-center text-white font-bold">3</div>
+                        <h2 class="text-2xl font-bold text-[#1A1F49] font-display">Compte utilisateur</h2>
+                    </div>
+                    <p class="mb-4">Pour utiliser certaines fonctionnalités, vous devez créer un compte. Vous vous engagez à :</p>
+                    <ul class="space-y-3 list-none pl-2">
+                        <li class="flex gap-3">
+                            <i data-lucide="check" class="text-[#F7B0AC] w-5 h-5 flex-shrink-0 mt-1"></i>
+                            <span>Fournir des informations exactes et à jour.</span>
+                        </li>
+                        <li class="flex gap-3">
+                            <i data-lucide="check" class="text-[#F7B0AC] w-5 h-5 flex-shrink-0 mt-1"></i>
+                            <span>Maintenir la confidentialité de vos identifiants de connexion.</span>
+                        </li>
+                        <li class="flex gap-3">
+                            <i data-lucide="check" class="text-[#F7B0AC] w-5 h-5 flex-shrink-0 mt-1"></i>
+                            <span>Ne pas créer de compte au nom d'une autre personne sans autorisation.</span>
+                        </li>
+                    </ul>
+                </div>
+
+                <!-- 4. Réservations et Paiements -->
+                <div>
+                    <div class="flex items-center gap-4 mb-4">
+                        <div class="w-10 h-10 rounded-full bg-[#1A1F49] flex items-center justify-center text-white font-bold">4</div>
+                        <h2 class="text-2xl font-bold text-[#1A1F49] font-display">Réservations & Paiements</h2>
+                    </div>
+                    <p class="leading-relaxed mb-4">
+                        Toute réservation effectuée sur l'application constitue un engagement ferme. Le paiement est sécurisé et peut être effectué par carte bancaire ou mobile money selon les options disponibles.
+                    </p>
+                    <p class="leading-relaxed text-sm text-slate-500">
+                        MonLook se réserve le droit de bloquer un compte en cas d'impayé ou de fraude avérée. Les prix affichés sont fixés librement par les Partenaires.
+                    </p>
+                </div>
+
+                <!-- 5. Annulation -->
+                <div>
+                    <div class="flex items-center gap-4 mb-4">
+                        <div class="w-10 h-10 rounded-full bg-[#1A1F49] flex items-center justify-center text-white font-bold">5</div>
+                        <h2 class="text-2xl font-bold text-[#1A1F49] font-display">Politique d'annulation</h2>
+                    </div>
+                    <p class="leading-relaxed">
+                        Les conditions d'annulation varient selon le Partenaire choisi et sont affichées au moment de la réservation. En cas d'annulation tardive ou de non-présentation ("No-Show"), des frais peuvent être appliqués conformément aux règles définies par le Partenaire.
+                    </p>
+                </div>
+
+                <!-- 6. Responsabilité -->
+                <div>
+                    <div class="flex items-center gap-4 mb-4">
+                        <div class="w-10 h-10 rounded-full bg-[#1A1F49] flex items-center justify-center text-white font-bold">6</div>
+                        <h2 class="text-2xl font-bold text-[#1A1F49] font-display">Limitation de responsabilité</h2>
+                    </div>
+                    <p class="leading-relaxed">
+                        Bien que nous vérifiions l'identité de nos Partenaires, MonLook ne peut garantir la satisfaction totale concernant la prestation artistique (coiffure, maquillage, etc.). Tout litige concernant la qualité du service doit être traité directement avec le Partenaire, bien que notre service client puisse agir comme médiateur.
+                    </p>
+                </div>
+
+                <!-- 7. Contact Legal -->
+                <div class="border-t border-slate-100 pt-8 mt-8">
+                    <h2 class="text-xl font-bold text-[#1A1F49] mb-4">Questions juridiques</h2>
+                    <p class="mb-6">
+                        Pour toute question concernant ces conditions, veuillez nous contacter à l'adresse suivante :
+                    </p>
+                    <div class="flex flex-wrap gap-4">
+                        <a href="mailto:info@monlook.online" class="inline-flex items-center gap-2 bg-[#1A1F49] text-white px-6 py-3 rounded-full hover:bg-[#262c5e] transition-colors">
+                            <i data-lucide="scale" class="w-4 h-4"></i>
+                            info@monlook.online
+                        </a>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- =========================
+     FOOTER
+========================== -->
+<footer class="relative w-full bg-white overflow-hidden p-4 md:p-4">
+    <section class="relative w-full bg-gradient-to-b to-[#000] from-[#1A1F49] text-white overflow-hidden rounded-[2rem] min-h-[500px]">
+
+        <!-- Background Image Layer -->
+        <section class="relative w-full bg-cover md:bg-auto md:bg-bottom min-h-[500px] bg-no-repeat bg-center text-white overflow-hidden rounded-[2rem]">
+            <div class="relative z-10 min-h-[500px] container mx-auto px-4 flex flex-col items-center justify-center text-center">
+
+                <!-- Logo Section -->
+                <div class="flex flex-col items-center gap-4 mb-12">
+                    <div class="p-2">
+                        <svg width="100" height="100" viewBox="0 0 161 157" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <g clip-path="url(#clip0_footer)"><path d="M19.95 106.02C18.29 106.02 17.43 106.88 17.43 108.54V153.26H17.5C27.15 153.26 33.7 148.8 37.37 139.79L37.8 138.71H39.24L37.8 155.42H0V153.98H0.36C2.02 153.98 2.88 153.12 2.88 151.46V108.54C2.88 106.88 2.02 106.02 0.36 106.02H0V104.58H20.38V106.02H19.95Z" fill="white"/><path d="M59.91 117.61C71.29 117.61 79.35 123.66 79.35 136.62C79.35 149.58 71.57 156.13 60.05 156.13C48.53 156.13 40.18 148.64 40.18 136.4C40.18 124.16 47.96 117.61 59.91 117.61ZM59.62 153.97C62.93 153.97 64.8 147.13 64.8 136.47C64.8 125.81 63 119.84 59.76 119.84C56.52 119.84 54.72 126.32 54.72 136.98C54.72 147.64 56.45 153.97 59.62 153.97Z" fill="white"/><path d="M101.09 117.61C112.47 117.61 120.53 123.66 120.53 136.62C120.53 149.58 112.75 156.13 101.23 156.13C89.71 156.13 81.36 148.64 81.36 136.4C81.36 124.16 89.14 117.61 101.09 117.61ZM100.8 153.97C104.11 153.97 105.98 147.13 105.98 136.47C105.98 125.81 104.18 119.84 100.94 119.84C97.7 119.84 95.9 126.32 95.9 136.98C95.9 147.64 97.63 153.97 100.8 153.97Z" fill="white"/><path d="M140.91 153.98V155.42H121.32V153.98H121.68C123.34 153.98 124.2 153.12 124.2 151.46V108.54C124.2 106.88 123.34 106.02 121.68 106.02H121.32V104.58C127.51 104.58 132.77 104.29 136.59 102.35H138.03V133.53L150.85 123.09C152.51 121.72 151.79 120.57 150.13 120.57H148.55V119.06H159.86V120.57H159.5C157.84 120.57 155.9 121.79 154.32 123.09L143.88 131.66C146.26 137.49 149.14 142.82 154.03 142.82C156.26 142.82 158.06 141.74 159.14 139.36L160.51 139.65C161.73 150.59 158.71 156.14 152.3 156.14C143.3 156.14 142.8 145.34 142 133.17L138.04 136.41V151.46C138.04 153.12 138.9 153.98 140.56 153.98H140.92H140.91Z" fill="white"/><path d="M47.92 32.46V68.36L64.78 63.17C65.53 62.94 65.48 61.87 64.71 61.7C57.47 60.07 52.07 53.61 52.07 45.88V30.05C52.07 25.58 53.88 21.52 56.81 18.59C59.76 15.65 63.84 13.82 68.34 13.84C77.35 13.87 84.49 21.51 84.49 30.52V61.64C84.49 69.41 76.98 75.12 69.44 73.32L112.76 83.3C112.76 83.3 112.83 83.28 112.83 83.25V33.16C112.83 15.39 98.85 0.379975 81.08 0.00997545C71.84 -0.190025 63.46 3.47998 57.43 9.50998C51.55 15.38 47.92 23.5 47.92 32.46Z" fill="white"/></g><defs><clipPath id="clip0_footer"><rect width="160.76" height="156.14" fill="white"/></clipPath></defs></svg>
+                    </div>
+                </div>
+
+                <!-- Separator Line -->
+                <div class="w-full max-w-2xl h-px bg-gradient-to-r from-transparent via-blue-400/30 to-transparent mb-10"></div>
+
+                <!-- Navigation Links -->
+                <nav class="flex flex-wrap justify-center gap-8 md:gap-12 text-sm md:text-base font-medium text-slate-300">
+                    <a href="./contact.html" class="hover:text-white transition-colors">Centre d'aide</a>
+                    <a href="./terms.html" class="text-white border-b border-blue-400 pb-1">Termes de Services</a>
+                    <a href="./privacy.html" class="hover:text-white transition-colors">Politique de Confidentialité</a>
+                </nav>
+            </div>
+        </section>
+    </section>
+</footer>
+
+<script>
+    lucide.createIcons();
+    tailwind.config = {
+        theme: {
+            extend: {
+                fontFamily: {
+                    sans: ['Inter', 'sans-serif'],
+                },
+            }
+        }
+    }
+</script>
+</body>
+</html>
