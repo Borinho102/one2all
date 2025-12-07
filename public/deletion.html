@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MonLook - Suppression de compte</title>
+    <link rel="icon" href="./favicon.png"/>
+    <!-- 1. Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- 2. Fonts & Styles -->
+    <style>
+        @font-face {
+            font-family: 'Atlantis Famingo Regular';
+            font-style: normal;
+            font-weight: normal;
+            src: local('Atlantis Famingo Regular'), url('./AtlantisFamingo-E4aor.woff') format('woff');
+        }
+        .font {
+            font-family: 'Atlantis Famingo Regular';
+        }
+        /* Smooth scrolling */
+        html { scroll-behavior: smooth; }
+
+        /* Custom Checkbox Style */
+        .checkbox-wrapper input:checked + div {
+            background-color: #1A1F49;
+            border-color: #1A1F49;
+        }
+        .checkbox-wrapper input:checked + div svg {
+            display: block;
+        }
+    </style>
+
+    <!-- 3. Load Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+</head>
+<body class="bg-[#F8FAFC]">
+
+<!-- =========================
+     HEADER
+========================== -->
+<header>
+    <nav class="w-full absolute left-0 top-0 !z-[50]">
+        <div class="container max-w-6xl mx-auto px-4 h-24 flex items-center justify-between">
+            <div class="flex-shrink-0">
+                <a href="index.html" class="block !text-decoration-none">
+                    <svg width="50" height="63" viewBox="0 0 50 63" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M0.0100002 24.5158V50.0458C0.0100002 50.8458 0.779999 51.4058 1.54 51.1758L12.75 47.7258C13.32 47.5458 13.28 46.7458 12.69 46.6158C7.22 45.3858 3.14 40.4958 3.14 34.6658V22.7058C3.14 19.3258 4.51 16.2558 6.72 14.0458C8.95 11.8258 12.03 10.4458 15.43 10.4558C22.24 10.4758 27.64 16.2558 27.64 23.0658V46.5858C27.64 52.4558 21.96 56.7758 16.27 55.4158L49.01 62.9658C49.01 62.9658 49.06 62.9558 49.06 62.9258V25.0658C49.06 11.6358 38.49 0.295798 25.06 0.0057984C18.08 -0.144202 11.74 2.6258 7.19 7.1858C2.75 11.6258 0 17.7558 0 24.5358L0.0100002 24.5158Z" fill="white"/>
+                    </svg>
+                </a>
+            </div>
+
+            <div class="hidden md:flex items-center gap-16 justify-end text-sm font-medium">
+                <a href="index.html" class="text-gray-300 hover:text-white transition-colors font-inter">Accueil</a>
+                <a href="contact.html" class="text-white font-semibold transition-colors font-inter">Contact</a>
+            </div>
+
+            <div>
+                <div class="p-2 bg-[#1e2235]/60 backdrop-blur-md rounded-[20px] min-w-[200px] border border-white/10 shadow-2xl">
+                    <button class="w-full items-center justify-center bg-[#8fa1d8] hover:bg-[#7c8ec9] flex text-white text-lg font-normal py-2 rounded-[12px] shadow-inner transition-colors duration-200">
+                        Télécharger
+                        <i data-lucide="download" class="ml-2 h-4 w-4"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </nav>
+</header>
+
+<!-- =========================
+     HERO / TITLE SECTION
+========================== -->
+<section class="relative w-full pt-[10rem] pb-20 bg-[#1A1F49] overflow-hidden">
+    <!-- Background Blob -->
+    <div class="absolute top-0 right-0 w-[600px] h-[600px] bg-blue-900/20 rounded-full blur-[120px] pointer-events-none"></div>
+    <div class="absolute bottom-0 left-0 w-[400px] h-[400px] bg-[#F7B0AC]/10 rounded-full blur-[100px] pointer-events-none"></div>
+
+    <div class="container mx-auto px-4 relative z-10 text-center">
+        <!-- Badge -->
+        <div class="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-red-500/10 border border-red-500/20 text-red-300 text-sm font-medium mb-6 backdrop-blur-sm">
+            <i data-lucide="alert-triangle" class="w-4 h-4"></i>
+            Zone de Danger
+        </div>
+
+        <h1 class="text-4xl md:text-6xl font font-bold text-white mb-6 leading-tight">
+            Supprimer mon <span class="text-[#F7B0AC]">compte</span>
+        </h1>
+        <p class="text-slate-300 text-lg max-w-2xl mx-auto leading-relaxed">
+            Nous sommes tristes de vous voir partir. Veuillez noter que cette action est
+            <span class="text-white font-semibold">irréversible</span> et entraînera la perte de toutes vos données.
+        </p>
+    </div>
+</section>
+
+<!-- =========================
+     FORM SECTION
+========================== -->
+<section class="relative w-full py-16 -mt-10 mb-10 z-20">
+    <div class="container mx-auto px-4">
+
+        <div class="grid lg:grid-cols-5 gap-8 max-w-6xl mx-auto">
+
+            <!-- LEFT: WARNING INFO (2 Cols) -->
+            <div class="lg:col-span-2 space-y-6">
+
+                <!-- Info Card -->
+                <div class="bg-white rounded-[2rem] p-8 shadow-sm border border-slate-100 h-full flex flex-col">
+                    <div class="w-14 h-14 bg-red-50 text-red-500 rounded-2xl flex items-center justify-center mb-6 shadow-sm">
+                        <i data-lucide="trash-2" class="w-7 h-7"></i>
+                    </div>
+                    <h3 class="text-xl font-bold text-[#1A1F49] mb-4 font-display">Ce qui va se passer</h3>
+
+                    <ul class="space-y-4 text-slate-500 text-sm mb-6">
+                        <li class="flex gap-3 items-start">
+                            <i data-lucide="x-circle" class="w-5 h-5 text-red-400 flex-shrink-0 mt-0.5"></i>
+                            <p>Votre profil public et vos informations personnelles seront effacés définitivement.</p>
+                        </li>
+                        <li class="flex gap-3 items-start">
+                            <i data-lucide="x-circle" class="w-5 h-5 text-red-400 flex-shrink-0 mt-0.5"></i>
+                            <p>Votre historique, vos favoris et vos looks enregistrés seront perdus.</p>
+                        </li>
+                        <li class="flex gap-3 items-start">
+                            <i data-lucide="clock" class="w-5 h-5 text-[#F7B0AC] flex-shrink-0 mt-0.5"></i>
+                            <p>La suppression effective de nos serveurs prendra effet sous 30 jours (RGPD).</p>
+                        </li>
+                    </ul>
+
+                    <hr class="my-6 border-slate-100"/>
+
+                    <p class="text-sm text-slate-400 mb-2">Vous avez changé d'avis ?</p>
+                    <a href="mailto:support@monlook.online" class="text-[#1A1F49] font-semibold hover:underline flex items-center gap-2">
+                        Contacter le support
+                        <i data-lucide="arrow-right" class="w-4 h-4"></i>
+                    </a>
+                </div>
+            </div>
+
+            <!-- RIGHT: DELETION FORM (3 Cols) -->
+            <div class="lg:col-span-3">
+                <div class="bg-white rounded-[2.5rem] p-8 md:p-12 shadow-xl shadow-slate-200/50 border border-slate-100 h-full relative overflow-hidden">
+
+                    <!-- Decorative blur inside form -->
+                    <div class="absolute top-0 right-0 w-64 h-64 bg-red-500/5 rounded-full blur-[60px] pointer-events-none -mr-16 -mt-16"></div>
+
+                    <h2 class="text-3xl font-bold text-[#1A1F49] mb-2 font">Formulaire de suppression</h2>
+                    <p class="text-slate-500 mb-8">Pour valider la demande, veuillez confirmer vos informations.</p>
+
+                    <form id="deletion-form" class="space-y-6 relative z-10">
+
+                        <!-- Email (Critical) -->
+                        <div class="space-y-2">
+                            <label class="text-sm font-medium text-slate-700 ml-1">Email associé au compte <span class="text-red-500">*</span></label>
+                            <input type="email" id="email" required placeholder="votre@email.com"
+                                   class="w-full bg-slate-50 border border-slate-200 rounded-xl px-5 py-3 outline-none focus:ring-2 focus:ring-red-200 focus:border-red-300 transition-all placeholder:text-slate-400">
+                        </div>
+
+                        <!-- Phone (Optional but useful for mobile apps) -->
+                        <div class="space-y-2">
+                            <label class="text-sm font-medium text-slate-700 ml-1">Téléphone (Optionnel)</label>
+                            <input type="tel" id="phone" placeholder="+33 6 12 34 56 78"
+                                   class="w-full bg-slate-50 border border-slate-200 rounded-xl px-5 py-3 outline-none focus:ring-2 focus:ring-[#909BD1] focus:border-transparent transition-all placeholder:text-slate-400">
+                            <p class="text-xs text-slate-400 ml-1">Utile si vous vous êtes inscrit via numéro de téléphone.</p>
+                        </div>
+
+                        <!-- Reason -->
+                        <div class="space-y-2">
+                            <label class="text-sm font-medium text-slate-700 ml-1">Raison du départ</label>
+                            <select id="reason" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-5 py-3 outline-none focus:ring-2 focus:ring-[#909BD1] focus:border-transparent transition-all text-slate-600">
+                                <option value="not_using">Je n'utilise plus l'application</option>
+                                <option value="privacy">Préoccupations de confidentialité</option>
+                                <option value="bugs">L'application ne fonctionne pas comme prévu</option>
+                                <option value="restart">Je veux créer un nouveau compte</option>
+                                <option value="other">Autre</option>
+                            </select>
+                        </div>
+
+                        <!-- Confirmation Checkbox -->
+                        <div class="py-2">
+                            <label class="flex items-start gap-3 cursor-pointer group checkbox-wrapper">
+                                <div class="relative flex items-center">
+                                    <input type="checkbox" id="confirm-delete" required class="peer sr-only">
+                                    <div class="h-6 w-6 border-2 border-slate-300 rounded-md transition-colors peer-focus:ring-2 peer-focus:ring-offset-2 peer-focus:ring-red-500">
+                                        <svg class="hidden w-4 h-4 text-white mx-auto mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7" />
+                                        </svg>
+                                    </div>
+                                </div>
+                                <span class="text-sm text-slate-600 group-hover:text-[#1A1F49] transition-colors pt-0.5">
+                                    Je comprends que cette action est irréversible et je confirme vouloir supprimer mon compte MonLook.
+                                </span>
+                            </label>
+                        </div>
+
+                        <!-- Submit Button -->
+                        <div class="pt-2">
+                            <button type="submit" id="submit-btn" class="group w-full bg-[#1A1F49] hover:bg-red-600 text-white text-lg font-medium py-4 rounded-xl shadow-lg shadow-slate-900/10 transition-all duration-300 flex items-center justify-center gap-2">
+                                <span id="btn-text">Confirmer la suppression</span>
+                                <i data-lucide="trash-2" class="w-5 h-5 group-hover:scale-110 transition-transform"></i>
+                            </button>
+                        </div>
+                    </form>
+
+                </div>
+            </div>
+
+        </div>
+    </div>
+</section>
+
+<!-- =========================
+     FOOTER
+========================== -->
+<footer class="relative w-full bg-white overflow-hidden p-4 md:p-4">
+    <section class="relative w-full bg-gradient-to-b to-[#000] from-[#1A1F49] text-white overflow-hidden rounded-[2rem] min-h-[500px]">
+        <section class="relative w-full bg-cover md:bg-auto md:bg-bottom min-h-[500px] bg-no-repeat bg-center text-white overflow-hidden rounded-[2rem]">
+            <div class="relative z-10 min-h-[500px] container mx-auto px-4 flex flex-col items-center justify-center text-center">
+                <!-- Logo Section -->
+                <div class="flex flex-col items-center gap-4 mb-12">
+                    <div class="p-2">
+                        <svg width="100" height="100" viewBox="0 0 161 157" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <g clip-path="url(#clip0_footer)"><path d="M19.95 106.02C18.29 106.02 17.43 106.88 17.43 108.54V153.26H17.5C27.15 153.26 33.7 148.8 37.37 139.79L37.8 138.71H39.24L37.8 155.42H0V153.98H0.36C2.02 153.98 2.88 153.12 2.88 151.46V108.54C2.88 106.88 2.02 106.02 0.36 106.02H0V104.58H20.38V106.02H19.95Z" fill="white"/><path d="M59.91 117.61C71.29 117.61 79.35 123.66 79.35 136.62C79.35 149.58 71.57 156.13 60.05 156.13C48.53 156.13 40.18 148.64 40.18 136.4C40.18 124.16 47.96 117.61 59.91 117.61ZM59.62 153.97C62.93 153.97 64.8 147.13 64.8 136.47C64.8 125.81 63 119.84 59.76 119.84C56.52 119.84 54.72 126.32 54.72 136.98C54.72 147.64 56.45 153.97 59.62 153.97Z" fill="white"/><path d="M101.09 117.61C112.47 117.61 120.53 123.66 120.53 136.62C120.53 149.58 112.75 156.13 101.23 156.13C89.71 156.13 81.36 148.64 81.36 136.4C81.36 124.16 89.14 117.61 101.09 117.61ZM100.8 153.97C104.11 153.97 105.98 147.13 105.98 136.47C105.98 125.81 104.18 119.84 100.94 119.84C97.7 119.84 95.9 126.32 95.9 136.98C95.9 147.64 97.63 153.97 100.8 153.97Z" fill="white"/><path d="M140.91 153.98V155.42H121.32V153.98H121.68C123.34 153.98 124.2 153.12 124.2 151.46V108.54C124.2 106.88 123.34 106.02 121.68 106.02H121.32V104.58C127.51 104.58 132.77 104.29 136.59 102.35H138.03V133.53L150.85 123.09C152.51 121.72 151.79 120.57 150.13 120.57H148.55V119.06H159.86V120.57H159.5C157.84 120.57 155.9 121.79 154.32 123.09L143.88 131.66C146.26 137.49 149.14 142.82 154.03 142.82C156.26 142.82 158.06 141.74 159.14 139.36L160.51 139.65C161.73 150.59 158.71 156.14 152.3 156.14C143.3 156.14 142.8 145.34 142 133.17L138.04 136.41V151.46C138.04 153.12 138.9 153.98 140.56 153.98H140.92H140.91Z" fill="white"/><path d="M47.92 32.46V68.36L64.78 63.17C65.53 62.94 65.48 61.87 64.71 61.7C57.47 60.07 52.07 53.61 52.07 45.88V30.05C52.07 25.58 53.88 21.52 56.81 18.59C59.76 15.65 63.84 13.82 68.34 13.84C77.35 13.87 84.49 21.51 84.49 30.52V61.64C84.49 69.41 76.98 75.12 69.44 73.32L112.76 83.3C112.76 83.3 112.83 83.28 112.83 83.25V33.16C112.83 15.39 98.85 0.379975 81.08 0.00997545C71.84 -0.190025 63.46 3.47998 57.43 9.50998C51.55 15.38 47.92 23.5 47.92 32.46Z" fill="white"/></g><defs><clipPath id="clip0_footer"><rect width="160.76" height="156.14" fill="white"/></clipPath></defs></svg>
+                    </div>
+                </div>
+                <div class="w-full max-w-2xl h-px bg-gradient-to-r from-transparent via-blue-400/30 to-transparent mb-10"></div>
+                <nav class="flex flex-wrap justify-center gap-8 md:gap-12 text-sm md:text-base font-medium text-slate-300">
+                    <a href="./contact.html" class="hover:text-white transition-colors">Contact / Aide</a>
+                    <a href="./terms.html" class="hover:text-white transition-colors">Termes de Services</a>
+                    <a href="./privacy.html" class="hover:text-white transition-colors">Politique de Confidentialité</a>
+                </nav>
+            </div>
+        </section>
+    </section>
+</footer>
+
+<!-- =========================
+     FIREBASE & SCRIPTS
+========================== -->
+<script type="module">
+    // 1. Import Firebase SDKs
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+    import { getFirestore, collection, addDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+
+    // 2. Your Web App's Firebase configuration
+    const firebaseConfig = {
+        apiKey: "AIzaSyApeKyf1BJbQIZYlQ7Czo2Pmltf2Psbgqg",
+        authDomain: "monlook-ddf48.firebaseapp.com",
+        projectId: "monlook-ddf48",
+        storageBucket: "monlook-ddf48.firebasestorage.app",
+        messagingSenderId: "140000876807",
+        appId: "1:140000876807:web:c6237982d9c00a9632cda2",
+        measurementId: "G-W671EF11JL"
+    };
+
+    // 3. Initialize Firebase
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+
+    // 4. Handle Deletion Form Submission
+    const deletionForm = document.getElementById('deletion-form');
+    const submitBtn = document.getElementById('submit-btn');
+    const btnText = document.getElementById('btn-text');
+
+    deletionForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+
+        const email = document.getElementById('email').value;
+        const phone = document.getElementById('phone').value;
+        const reason = document.getElementById('reason').value;
+        const confirmed = document.getElementById('confirm-delete').checked;
+
+        if (!confirmed) {
+            alert("Veuillez confirmer que vous souhaitez supprimer votre compte.");
+            return;
+        }
+
+        // Show Loading State
+        const originalText = btnText.innerText;
+        btnText.innerText = "Traitement en cours...";
+        submitBtn.disabled = true;
+        submitBtn.classList.add('opacity-75', 'cursor-not-allowed', 'bg-red-700');
+
+        try {
+            // 5. Add Data to Firestore Collection "deletion_requests"
+            await addDoc(collection(db, "deletion_requests"), {
+                type: "account_termination",
+                email: email,
+                phone: phone,
+                reason: reason,
+                confirmed: true,
+                status: "pending",
+                createdAt: serverTimestamp() // Adds the server time automatically
+            });
+
+            // Success Feedback
+            alert("Votre demande de suppression a été enregistrée. Vous recevrez un email de confirmation une fois le traitement commencé.");
+            deletionForm.reset(); // Clear the form
+
+        } catch (error) {
+            console.error("Erreur lors de l'envoi : ", error);
+            alert("Une erreur est survenue lors de la demande. Veuillez réessayer ou contacter le support directement.");
+        } finally {
+            // Reset Button State
+            btnText.innerText = originalText;
+            submitBtn.disabled = false;
+            submitBtn.classList.remove('opacity-75', 'cursor-not-allowed', 'bg-red-700');
+        }
+    });
+</script>
+
+<script>
+    // Initialize Lucide Icons
+    lucide.createIcons();
+
+    // Tailwind Configuration
+    tailwind.config = {
+        theme: {
+            extend: {
+                fontFamily: {
+                    sans: ['Inter', 'sans-serif'],
+                },
+            }
+        }
+    }
+</script>
+</body>
+</html>
