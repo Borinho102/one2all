@@ -7,7 +7,7 @@ import { setGlobalOptions } from "firebase-functions";
 import { corsMiddleware } from "./api/middlewares/cors";
 import { listingRouter } from "./api/v1/listing.route";
 import { registerSwagger } from "./api/docs/swagger";
-import {authMiddleware} from "./api/middlewares/auth";
+// import {authMiddleware} from "./api/middlewares/auth";
 
 console.log("[STARTUP] Firebase Functions initializing...");
 
@@ -20,7 +20,8 @@ console.log("[STARTUP] Express app created");
 
 // Middlewares
 app.use(corsMiddleware);
-app.use(authMiddleware);
+// app.use(authMiddleware);
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
