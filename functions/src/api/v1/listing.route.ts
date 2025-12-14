@@ -14,7 +14,7 @@ import {
 } from "../../listing/search";
 
 import {
-    getBookingDetail, getBookingDetailById, getBookingsByMode, getVendorTodayBookings
+    getBookingDetail, getBookingDetailById, getBookingsByMode, getVendorTodayBookings, sendBookingConfirmation
 } from "../../listing/book";
 
 import {
@@ -329,7 +329,7 @@ listingRouter.get("/booking-detail-by-id", wrap(getBookingDetailById));
  */
 listingRouter.all("/bookings-by-mode", wrap(getBookingsByMode));
 listingRouter.all("/today-booking", wrap(getVendorTodayBookings));
-
+listingRouter.all("/booking", wrap(sendBookingConfirmation));
 
 listingRouter.all("/notification", wrap(sendBatchNotifications));
 listingRouter.all("/notify-user", wrap(sendNotificationToUser));

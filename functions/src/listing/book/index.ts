@@ -2,6 +2,8 @@
 
 import { Request, Response } from "express";
 import admin from "firebase-admin";
+import nodemailer from 'nodemailer';
+import { createEvent, DateArray } from 'ics'; // Import ics
 
 const db = admin.firestore();
 const BOOKING_COLLECTION = 'booking';
@@ -20,6 +22,10 @@ interface UserData {
     avatar?: string;
     role?: string;
     createdAt?: string;
+    workingPlaceAddress?: string;
+    address?: {
+        name?: string;
+    };
 }
 
 interface CartItemShort {
@@ -1358,9 +1364,285 @@ export async function getVendorTodayBookings(req: Request, res: Response) {
     }
 }
 
+
+
+
+
+
+// ============================================================
+// EMAIL NOTIFICATION SERVICE
+// ============================================================
+
+/**
+ * 📧 Internal Helper: Configure Transporter
+ * Replace these credentials with your actual SMTP provider (Gmail, SendGrid, AWS SES, etc.)
+ */
+
+const transporter = nodemailer.createTransport({
+    host: 'smtppro.zoho.com',
+    port: 465,
+    secure: true,
+    auth: {
+        user: process.env.SMTP_EMAIL || 'info@monlook.online',
+        pass: process.env.SMTP_PASSWORD || 'dQwjZZAjjQLE' 
+    }
+});
+
+transporter.verify((error, success) => {
+    if (error) {
+        console.error('❌ SMTP connection error:', error);
+    } else {
+        console.log('✅ SMTP server ready');
+    }
+});
+
+// Helper: Generate ICS String with proper METHOD and PRODID
+function generateIcsContent(eventDetails: any): Promise<string> {
+    return new Promise((resolve, reject) => {
+        createEvent(eventDetails, (error, value) => {
+            if (error) {
+                reject(error);
+            }
+            // Ensure METHOD:REQUEST is in the ICS
+            let icsValue = value as string;
+            if (!icsValue.includes('METHOD:REQUEST')) {
+                icsValue = icsValue.replace('END:VCALENDAR', 'METHOD:REQUEST\nEND:VCALENDAR');
+            }
+            resolve(icsValue);
+        });
+    });
+}
+
+// Helper: Generate Google Calendar Web Link
+function generateGoogleCalendarLink(title: string, start: Date, durationMinutes: number, description: string, location: string) {
+    const startTime = start.toISOString().replace(/-|:|\.\d\d\d/g, "");
+    const endTime = new Date(start.getTime() + durationMinutes * 60000).toISOString().replace(/-|:|\.\d\d\d/g, "");
+    
+    return `https://www.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(title)}&dates=${startTime}/${endTime}&details=${encodeURIComponent(description)}&location=${encodeURIComponent(location)}&sf=true&output=xml`;
+}
+
+// Helper: Parse Duration
+function parseDurationToMinutes(durationStr: string | number): number {
+    if (!durationStr) return 60;
+    if (typeof durationStr === 'number') return durationStr;
+    if (!isNaN(Number(durationStr))) return Number(durationStr);
+
+    let minutes = 0;
+    const hoursMatch = durationStr.match(/(\d+)\s*h/i);
+    const minsMatch = durationStr.match(/(\d+)\s*m/i);
+
+    if (hoursMatch) minutes += parseInt(hoursMatch[1]) * 60;
+    if (minsMatch) minutes += parseInt(minsMatch[1]);
+
+    return minutes > 0 ? minutes : 60;
+}
+
+// ---------------------------------------------------------
+// MAIN CONTROLLER
+// ---------------------------------------------------------
+
+export async function sendBookingConfirmation(req: Request, res: Response) {
+    try {
+        const bookingId = (req.body.booking_id || req.query.booking_id) as string;
+
+        if (!bookingId) {
+            return res.status(400).json({ success: false, error: 'Missing booking_id parameter' });
+        }
+
+        console.log(`📧 Initiating email sequence for booking: ${bookingId}`);
+
+        // 1. Fetch Data
+        const bookingDoc = await db.collection(BOOKING_COLLECTION).doc(bookingId).get();
+        if (!bookingDoc.exists) {
+            return res.status(404).json({ success: false, error: 'Booking not found' });
+        }
+
+        const shortCart = bookingDoc.data() as CartModelShort;
+        shortCart.id = bookingDoc.id;
+
+        const fullCart = await expandShortCart(shortCart);
+
+        const [client, vendor] = await Promise.all([
+            fullCart.client_id ? fetchUserData(fullCart.client_id) : Promise.resolve(null),
+            fullCart.vendor_id ? fetchUserData(fullCart.vendor_id) : Promise.resolve(null)
+        ]);
+
+        if (!client?.email || !vendor?.email) {
+            return res.status(400).json({ success: false, error: 'Client or Vendor email missing' });
+        }
+
+        // ---------------------------------------------------------
+        // 🗓️ PREPARE CALENDAR DATA
+        // ---------------------------------------------------------
+
+        const startDate = new Date(fullCart.book_datetime as string);
+        const dateFormatted = startDate.toLocaleString();
+        const durationMinutes = parseDurationToMinutes(fullCart.formatted_duration || 60);
+        const price = fullCart.total_amount || 'Calculated at venue';
+        const vendorAddress = `${vendor.address?.name || ''} ${vendor.workingPlaceAddress || ''}`.trim() || 'Location TBD';
+
+        const serviceListHtml = fullCart.items.map(service => {
+            const variantNames = service.variants.map(v => v.name).join(', ');
+            return `<li><strong>${service.name}</strong> (${variantNames})</li>`;
+        }).join('');
+
+        const serviceTextList = fullCart.items.map(s => `${s.name}`).join(', ');
+
+        const descriptionString = `Services: ${serviceTextList}\nPrice: ${price} $CA\nRef: ${bookingId}\n\nManage your booking at monlook.online`;
+
+        const startArray: DateArray = [
+            startDate.getFullYear(),
+            startDate.getMonth() + 1,
+            startDate.getDate(),
+            startDate.getHours(),
+            startDate.getMinutes()
+        ];
+
+        // IMPORTANT: Use the ACTUAL sender email (the Zoho email account)
+        const senderEmail = 'info@monlook.online'; 
+
+        const icsEventData = {
+            start: startArray,
+            duration: { minutes: durationMinutes },
+            title: `Appt with ${vendor.name}`,
+            description: descriptionString,
+            location: vendorAddress,
+            url: 'https://monlook.online',
+            organizer: { name: 'MonLook Booking', email: senderEmail }, // MUST match sender
+            attendees: [
+                { name: client.name, email: client.email, rsvp: true, role: 'REQ-PARTICIPANT' },
+                { name: vendor.name, email: vendor.email, rsvp: true, role: 'REQ-PARTICIPANT' }
+            ],
+            status: 'CONFIRMED' as const,
+            busyStatus: 'BUSY' as const,
+            method: 'REQUEST' // Required for RSVP buttons
+        };
+
+        const icsContent = await generateIcsContent(icsEventData);
+        
+        const googleLink = generateGoogleCalendarLink(
+            `Appt: ${vendor.name}`,
+            startDate,
+            durationMinutes,
+            descriptionString,
+            vendorAddress
+        );
+
+        // ---------------------------------------------------------
+        // 📧 SEND EMAILS
+        // ---------------------------------------------------------
+
+        // Client Email
+        const clientMailOptions = {
+            from: senderEmail,
+            to: client.email,
+            subject: `✅ Booking Confirmed! (Ref: ${bookingId})`,
+            headers: {
+                'X-Mailer': 'MonLook Booking System',
+                'X-Priority': '3'
+            },
+            html: `
+                <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: 0 auto;">
+                    <h2 style="color: #000;">Booking Confirmation</h2>
+                    <p>Hello <strong>${client.name || 'Client'}</strong>,</p>
+                    <p>Your appointment has been booked. A calendar invite has been added to this email.</p>
+                    
+                    <div style="background: #f9f9f9; padding: 15px; border-radius: 5px; border-left: 4px solid #4CAF50;">
+                        <h3>📅 Appointment Details</h3>
+                        <p><strong>Provider:</strong> ${vendor.name}</p>
+                        <p><strong>Address:</strong> ${vendorAddress}</p>
+                        <p><strong>Time:</strong> ${dateFormatted}</p>
+                        <p><strong>Total Price:</strong> ${price} $CA</p>
+                    </div>
+
+                    <div style="margin: 20px 0;">
+                        <a href="${googleLink}" style="background-color: #4285F4; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; font-weight: bold; font-size: 14px;">
+                            📅 Add to Google Calendar
+                        </a>
+                    </div>
+
+                    <h3>Services:</h3>
+                    <ul>${serviceListHtml}</ul>
+                </div>
+            `,
+            attachments: [
+                {
+                    filename: 'appointment.ics',
+                    content: icsContent,
+                    contentType: 'text/calendar; charset=utf-8; method=REQUEST',
+                    encoding: 'utf-8'
+                }
+            ]
+        };
+
+        // Vendor Email
+        const vendorMailOptions = {
+            from: senderEmail,
+            to: vendor.email,
+            subject: `🆕 New Booking: ${client.name}`,
+            headers: {
+                'X-Mailer': 'MonLook Booking System',
+                'X-Priority': '3'
+            },
+            html: `
+                <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px;">
+                    <h2>New Appointment Request</h2>
+                    <p>Hello <strong>${vendor.name}</strong>, new booking received.</p>
+                    
+                    <div style="background: #f0f8ff; padding: 15px; border-radius: 5px; border-left: 4px solid #2196F3;">
+                        <p><strong>Client:</strong> ${client.name}</p>
+                        <p><strong>Phone:</strong> ${client.phone || 'N/A'}</p>
+                        <p><strong>Time:</strong> ${dateFormatted}</p>
+                    </div>
+                    
+                    <div style="margin: 20px 0;">
+                        <a href="${googleLink}" style="background-color: #4285F4; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; font-weight: bold; font-size: 14px;">
+                            📅 Add to Google Calendar
+                        </a>
+                    </div>
+                </div>
+            `,
+            attachments: [
+                {
+                    filename: 'appointment.ics',
+                    content: icsContent,
+                    contentType: 'text/calendar; charset=utf-8; method=REQUEST',
+                    encoding: 'utf-8'
+                }
+            ]
+        };
+
+        // Execute Sending
+        const [clientResponse, vendorResponse] = await Promise.all([
+            transporter.sendMail(clientMailOptions),
+            transporter.sendMail(vendorMailOptions)
+        ]);
+
+        console.log(`Client Response:`, JSON.stringify(clientResponse), clientResponse);
+        console.log(`Vendor Response:`, JSON.stringify(vendorResponse), vendorResponse);
+        console.log(`✅ Emails sent successfully to ${client.email} and ${vendor.email}`);
+
+        return res.status(200).json({
+            success: true,
+            message: 'Confirmation emails sent with calendar events',
+            data: { booking_id: bookingId, client: client.email, vendor: vendor.email }
+        });
+
+    } catch (error: any) {
+        console.error('❌ Error sending confirmation emails:', error);
+        return res.status(500).json({
+            success: false,
+            error: 'Failed to send emails',
+            message: error.message
+        });
+    }
+}
+
+
 export default {
     getBookingDetail,
     getBookingDetailById,
     getBookingsByMode,
-    getVendorTodayBookings
+    getVendorTodayBookings,
+    sendBookingConfirmation
 };
