@@ -534,14 +534,16 @@ export const sendNotification = functions.https.onRequest(
 
             // API Key validation
             const validApiKey = config.notification.apiKey;
-            const authHeader = req.headers.authorization as string;
-            const providedApiKey = authHeader?.replace("Bearer ", "");
+            const authHeader = (req.headers['api_key']) as string;
+
+            // 2. Remove "Bearer " if it exists and trim whitespace
+            const providedApiKey = authHeader?.replace(/^Bearer\s+/i, "").trim();
 
             if (!providedApiKey || providedApiKey !== validApiKey) {
                 logger.warn("❌ Unauthorized API request - Key mismatch");
                 const executionTime = Date.now() - startTime;
 
-                res.status(401).json({
+                res.status(200).json({
                     success: false,
                     error: "Unauthorized",
                     timestamp: getTimestamp(),
@@ -576,7 +578,7 @@ export const sendNotification = functions.https.onRequest(
                     request.userId
                 );
             } else {
-                res.status(400).json({
+                res.status(200).json({
                     error: "Either userId or topic must be provided",
                     timestamp: getTimestamp(),
                     ...(INCLUDE_DEBUG_INFO && { debug: buildDebugResponse() }),
@@ -620,7 +622,7 @@ export const sendNotification = functions.https.onRequest(
             };
 
             if (error instanceof functions.https.HttpsError) {
-                res.status(400).json({
+                res.status(200).json({
                     ...baseError,
                     error: error.message,
                     code: error.code,
@@ -628,7 +630,7 @@ export const sendNotification = functions.https.onRequest(
                 return;
             }
 
-            res.status(500).json({
+            res.status(200).json({
                 ...baseError,
                 error: "Internal server error",
             });
