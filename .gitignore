@@ -73,3 +73,16 @@ node_modules/
 # dataconnect generated files
 .dataconnect
 database.rules.json
+
+# 🔒 Google Cloud Credentials - NE JAMAIS COMMITTER
+api-key.json
+serviceAccountKey.json
+credentials.json
+firebase-adminsdk*.json
+*-firebase-adminsdk-*.json
+
+# Autres fichiers sensibles
+*.pem
+*.key
+*.p12
+*.pfx
